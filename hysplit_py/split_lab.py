@@ -7,8 +7,39 @@ from geopy.distance import vincenty
 import subprocess
 import os
 from matplotlib.colors import LinearSegmentedColormap as _LinearSegmentedColormap
+from matplotlib.colors import LogNorm as _LogNorm
 
-def read_hysplit_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
+def read_hysplit_conc_output_file(fname='/Users/htelg/Hysplit4/working/cdump'):
+    # os.chdir(self.settings.path2working_directory)
+    path2executable = ['./con2asc', '-icdump', '-s', '-d']
+    process = subprocess.check_output(path2executable, stderr=subprocess.STDOUT)
+    stdout = process.decode()
+    if stdout:
+        txt = 'Stdout produced a non empty string ... something is probably wrong?!?'
+        raise HysplitError(txt)
+
+    dfin = _pd.read_csv(fname + '.txt')
+    dfin.columns = [i.strip() for i in dfin.columns]
+
+    thedata = dfin.columns[-1]
+
+    lon = dfin.LON.unique()
+    lon.sort()
+    lat = dfin.LAT.unique()
+    lat.sort()
+    lat[:] = lat[::-1]
+
+    matrix = _pd.DataFrame(index=lat, columns=lon, dtype=float)
+    matrix.index.name = 'lat'
+    matrix.columns.name = 'lon'
+
+    for index, row in dfin.iterrows():
+        matrix.loc[row['LAT'], row['LON']] = row[thedata]
+
+    return HySplitConcentration(matrix)
+
+
+def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
     # fname_traj = '/Users/htelg/Hysplit4/working/tdump'
     traj_rein = open(fname)
 
@@ -147,7 +178,102 @@ def read_hysplit_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
 
 from matplotlib.collections import LineCollection
 
-def plot_on_map(self, intensity = 'time', resolution='c', lat_c='auto', lon_c='auto', w='auto', h='auto', bmap=None, color_gradiant = True, verbose=False, **plt_kwargs):
+
+def plot_conc_on_map(concentration, resolution='c', back_ground = None, lat_c='auto', lon_c='auto', w='auto', h='auto', zoom_out=2, bmap=None, verbose=False, **plt_kwargs):
+    """Plots a map of the flight path
+
+    Note
+    ----
+    packages: matplotlib-basemap,
+
+    Arguments
+    ---------
+    color_gradiant: bool or colormap.
+        The trajectory can be plotted so it changes color in time. If True the standard cm map is used but you can also pass a cm map here, e.g. color_gradiant = plt.cm.jet
+    zoom_out: float or array-like of len==2
+    back_ground: str [shadedrelief, bluemarble, etopo]
+    """
+    data = concentration.concentration
+    x_lon, y_lat = _np.meshgrid(data.columns, data.index)
+
+    if bmap:
+        a = _plt.gca()
+        f = a.get_figure()
+    else:
+        f, a = _plt.subplots()
+
+        if _np.any(_np.array([lat_c, lon_c, w, h]) == 'auto'):
+            # if 1:
+
+            lon_center = (x_lon.max() + x_lon.min()) / 2.
+            lat_center = (y_lat.max() + y_lat.min()) / 2.
+
+            if not hasattr(zoom_out, '__iter__'):
+                zoom_out = [zoom_out, zoom_out]
+            height = vincenty((y_lat.max(), lon_center), (y_lat.min(), lon_center)).m * zoom_out[0]
+            width = vincenty((lat_center, x_lon.max()), (lat_center, x_lon.min())).m * zoom_out[1]
+
+        if lat_c != 'auto':
+            lat_center = lat_c
+        if lon_c != 'auto':
+            lon_center = lon_c
+        if w != 'auto':
+            width = w
+        if h != 'auto':
+            height = h
+
+        if verbose:
+            print(('lat_center: %s\n'
+                   'lon_center: %s\n'
+                   'width: %s\n'
+                   'height: %s' % (lat_center, lon_center, width, height)))
+
+        bmap = _Basemap(projection='aeqd',
+                       lat_0=lat_center,
+                       lon_0=lon_center,
+                       width=width,
+                       height=height,
+                       resolution=resolution,
+                       ax=a)
+
+        if not back_ground:
+            # Fill the globe with a blue color
+            wcal = _np.array([161., 190., 255.]) / 255.
+            boundary = bmap.drawmapboundary(fill_color=wcal)
+
+            grau = 0.9
+            continents = bmap.fillcontinents(color=[grau, grau, grau], lake_color=wcal)
+        elif back_ground == 'shadedrelief':
+            bmap.shadedrelief()
+        elif back_ground == 'bluemarble':
+            bmap.bluemarble()
+            bmap.lsmask[bmap.lsmask == 1] = 0
+
+        elif back_ground == 'etopo':
+            bmap.etopo()
+
+        costlines = bmap.drawcoastlines()
+        bmap.drawstates()
+        bmap.drawcountries()
+
+
+    # #draw paralles
+    #         parallels = np.arange(l,90,10.)
+    #         m.drawparallels(parallels,labels=[1,0,0,0],fontsize=10)
+    #         # draw meridians
+    #         meridians = np.arange(180.,360.,10.)
+    #         m.drawmeridians(meridians,labels=[0,0,0,1],fontsize=10)
+
+
+
+    z = _np.ma.masked_invalid(data.values)
+    xm_lon, ym_lat = bmap(x_lon, y_lat)
+    pc = a.pcolormesh(xm_lon, ym_lat, z, zorder=100, norm=_LogNorm(), alpha=0.6, cmap=_plt.cm.Accent, linewidth=0, rasterized=True, **plt_kwargs)
+    f.colorbar(pc)
+
+    return bmap
+
+def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_c='auto', w='auto', h='auto', bmap=None, color_gradiant = True, verbose=False, **plt_kwargs):
     """Plots a map of the flight path
 
     Note
@@ -372,7 +498,17 @@ class HySplitTrajectory(object):
         self.trajectory = trajectory_dict['trajectory'][['latitude', 'longitude', 'altitude_above_ground(m)'] + trajectory_dict['output_variables']]
         self.trajectory_dropped = trajectory_dict['trajectory'][['trajectory_num', 'met_grid_num', 'forcast_hour', 'age_of_trajectory(h)']]
 
-    plot_on_map = plot_on_map
+    plot_on_map = plot_traj_on_map
+
+
+class HySplitConcentration():
+    def __init__(self, matrix):
+        self.concentration = matrix
+
+    def __len__(self):
+        return 0
+
+    plot = plot_conc_on_map
 
 
 class Parameter(object):
@@ -409,6 +545,7 @@ class Parameter(object):
             if value not in self._dict['options']:
                 txt = '{} is not an option for parameter {}. Choose one from {}'.format(value, self.what, self._dict['options'])
                 raise ValueError(txt)
+        self._dict['value'] = value
 
     ###############
 
@@ -442,6 +579,9 @@ class Parameter(object):
     def __format__(self, format_spec):
         return self._dict['value'].__format__(format_spec)
 
+    def __abs__(self):
+        return abs(self._dict['value'])
+
     ###############
     def copy(self):
         return deepcopy(self)
@@ -456,8 +596,9 @@ class Parameters(object):
         self._parent = parent
         self.pollutants = Pollutants(self)
         self.concentration_grids = ConcentrationGrids(self)
-        self.pollutants.add_pollutant('default')
-        self.concentration_grids.add_grid('default')
+        # self.pollutants.add_pollutant('default')
+        # self.concentration_grids.add_grid('default')
+        self.predefined_scenes = Scenes(parent)
 
     @property
     def start_time(self):
@@ -465,7 +606,7 @@ class Parameters(object):
 
     @start_time.setter
     def start_time(self, data):
-        self.__start_time = data
+        Parameter(self, 'control.start_time')._set_value(data)
 
     @property
     def num_starting_loc(self):
@@ -473,7 +614,7 @@ class Parameters(object):
 
     @num_starting_loc.setter
     def num_starting_loc(self, data):
-        self.__num_starting_loc = data
+        Parameter(self, 'control.num_starting_loc')._set_value(data)
 
     @property
     def starting_loc(self):
@@ -481,7 +622,7 @@ class Parameters(object):
 
     @starting_loc.setter
     def starting_loc(self, data):
-        self.__starting_loc = data
+        Parameter(self, 'control.starting_loc')._set_value(data)
 
     @property
     def run_time(self):
@@ -489,7 +630,9 @@ class Parameters(object):
 
     @run_time.setter
     def run_time(self, data):
-        self.__run_time = data
+        old = Parameter(self, 'control.concentration_grid.sampling_interval')
+        Parameter(self, 'control.concentration_grid.sampling_interval')._set_value([old[0], abs(data), old[-1]])
+        Parameter(self, 'control.run_time')._set_value(data)
 
     @property
     def vertical_motion_option(self):
@@ -497,7 +640,7 @@ class Parameters(object):
 
     @vertical_motion_option.setter
     def vertical_motion_option(self, data):
-        self.__vertical_motion_option = data
+        Parameter(self, 'control.vertical_motion_option')._set_value(data)
 
     @property
     def top_of_model_domain(self):
@@ -505,7 +648,7 @@ class Parameters(object):
 
     @top_of_model_domain.setter
     def top_of_model_domain(self, data):
-        self.__top_of_model_domain = data
+        Parameter(self, 'control.top_of_model_domain')._set_value(data)
 
     @property
     def input_met_file_names(self):
@@ -513,7 +656,7 @@ class Parameters(object):
 
     @input_met_file_names.setter
     def input_met_file_names(self, data):
-        self.__input_met_file_names = data
+        Parameter(self, 'control.input_met_file_names')._set_value(data)
 
     @property
     def output_path(self):
@@ -521,7 +664,7 @@ class Parameters(object):
 
     @output_path.setter
     def output_path(self, data):
-        self.__output_traj_file_name = data
+        Parameter(self, 'control.output_path')._set_value(data)
 
 
 class Settings(object):
@@ -658,7 +801,8 @@ settings['control.concentration_grid.sampling_stop_time'] = {'default': '12 31 2
                                                              'doc': ('Sampling stop time: year month day hour minute\n'
                                                                      'Default: 12 31 24 60\n'
                                                                      'After this time no more concentration records are written. Early termination on a high resolution grid (after the plume has moved away from the source) is an effective way of speeding up the computation for high resolution output near the source because once turned-off that particular grid resolution is no longer used for time-step computations.')}
-settings['control.concentration_grid.sampling_interval'] = {'default': [0, 24, 0],
+settings['control.concentration_grid.sampling_interval'] = {'value': [0,24, 0],
+                                                            'default': [0,24, 0],
                                                             'doc': ('Sampling interval: type hour minute\n'
                                                                     'Default: 0 24 0\n'
                                                                     'Each grid may have its own sampling or averaging interval. The interval can be of three different types: averaging (type=0), snapshot (type=1), or maximum (type=2). Averaging will produce output averaged over the specified interval. For instance, you may want to define a concentration grid that produces 24-hour average air concentrations for the duration of the simulation, which in the case of a 2-day simulation will result in 2 output maps, one for each day. Each defined grid can have a different output type and interval. Snapshot (or now) will give the instantaneous output at the output interval, and maximum will save the maximum concentration at each grid point over the duration of the output interval. Therefore, when a maximum concentration grid is defined, it is also required to define an identical snapshot or average grid over which the maximum will be computed. There is also the special case when the type value is less than zero. In that case the value represents the averaging time in hours and the output interval time represents the interval at which the average concentration is output. For instance, a setting of {-1 6 0} would output a one-hour average concentration every six hours.')}
@@ -708,8 +852,15 @@ run.parameters.concentration_grids.default"""
         self.vertical_concentration_levels_height_of_each = settings['control.concentration_grid.vertical_concentration_levels_height_of_each']['default']
         self.sampling_start_time = self._parent._parent.start_time
         self.sampling_stop_time = settings['control.concentration_grid.sampling_stop_time']['default']
-        self.sampling_interval = settings['control.concentration_grid.sampling_interval']['default']
 
+    @property
+    def sampling_interval(self):
+        return Parameter(self._parent._parent, 'control.concentration_grid.sampling_interval')
+        # self.sampling_interval = [0, self._parent._parent.run_time, 0] #settings['control.concentration_grid.sampling_interval']['default']
+
+    @sampling_interval.setter
+    def sampling_interval(self, data):
+        Parameter(self._parent._parent, 'control.concentration_grid.sampling_interval')._set_value(data)
 
 class ConcentrationGrids(object):
     def __init__(self, parent):
@@ -772,6 +923,10 @@ class Pollutant(object):
         self.radioactive_decay = settings['control.pollutant.radioactive_decay']['default']
         self.pollutant_resuspension = settings['control.pollutant.pollutant_resuspension']['default']
 
+    def remove_pollutant(self):
+        self._parent._pollutant_dict.pop(self._name)
+        delattr(self._parent, self._name)
+
 
 class Pollutants(object):
     def __init__(self, parent):
@@ -797,13 +952,69 @@ class Pollutants(object):
             out.append(i[1])
         return iter(out)
 
-    def add_pollutant(self, name):
+    def add_pollutant_gas(self, name):
         if name in self._pollutant_dict.keys():
             txt = 'Pollutant with name "{}" already exists ... pick other name!'
             raise KeyError(txt)
         pollutant = Pollutant(self, name)
         setattr(self, name, pollutant)
         self._pollutant_dict[name] = pollutant
+
+    def add_pollutant_particle(self, name, mode = 'accumulation', deposition = 'dry'):
+        if name in self._pollutant_dict.keys():
+            txt = 'Pollutant with name "{}" already exists ... pick other name!'
+            raise KeyError(txt)
+        pollutant = Pollutant(self, name)
+        setattr(self, name, pollutant)
+        self._pollutant_dict[name] = pollutant
+        if mode == 'accumulation':
+            pollutant.deposition_particle_diameter = 0.2
+            pollutant.deposition_particle_density = 1.8
+            pollutant.deposition_particle_shape = 1.
+        elif mode == 'coarse':
+            pollutant.deposition_particle_diameter = 2.5
+            pollutant.deposition_particle_density = 2.6 # density of SiO2
+            pollutant.deposition_particle_shape = 1.
+
+        if deposition != 'dry':
+            txt = 'sorry, depositions other then dry are not implemented yet'
+            raise ValueError(txt)
+
+class Scenes(object):
+    def __init__(self, run_instance):
+        self.run = run_instance
+
+    def hysplit_example(self):
+        """this is the default hysplit example for concentration simulations"""
+        self.run.parameters.pollutants.add_pollutant_gas('default')
+        self.run.parameters.concentration_grids.add_grid('default')
+
+        self.run.parameters.start_time = '00 00 00 00'
+        self.run.parameters.starting_loc = [[40.0, -90.0, 10.0]]
+        self.run.parameters.run_time = 12
+        self.run.parameters.vertical_motion_option = 0
+        self.run.parameters.top_of_model_domain = 10000.0
+        self.run.parameters.input_met_file_names = ['/Users/htelg/Hysplit4/working/oct1618.BIN']
+        self.run.parameters.concentration_grids.default.sampling_interval = [0, 12, 0]
+        self.run.parameters.concentration_grids.default.spacing = [0.05, 0.05]
+        self.run.parameters.concentration_grids.default.span = [30., 30.]
+        self.run.parameters.concentration_grids.default.vertical_concentration_levels_height_of_each = 100
+        self.run.parameters.pollutants.default.deposition_diffusivity_ratio = 0.0
+        self.run.parameters.pollutants.default.deposition_effective_henrys_constant = 0.0
+        self.run.parameters.pollutants.default.deposition_particle_density = 0.0
+        self.run.parameters.pollutants.default.deposition_particle_diameter = 0.0
+        self.run.parameters.pollutants.default.deposition_particle_shape = 0.0
+        self.run.parameters.pollutants.default.deposition_pollutant_molecular_weight = 0.0
+        self.run.parameters.pollutants.default.deposition_surface_reactivity_ratio = 0.0
+        self.run.parameters.pollutants.default.deposition_velocity = 0.0
+        self.run.parameters.pollutants.default.emission_rate = 1.
+        self.run.parameters.pollutants.default.hours_of_emission = 1.0
+        self.run.parameters.pollutants.default.pollutant_resuspension = 0.0
+        self.run.parameters.pollutants.default.radioactive_decay = 0.0
+        self.run.parameters.pollutants.default.release_start_time = "00 00 00 00"
+        self.run.parameters.pollutants.default.wet_removal_below_cloud = 0.0
+        self.run.parameters.pollutants.default.wet_removal_henrys_constant = 0.0
+        self.run.parameters.pollutants.default.wet_removal_in_cloud = 0.0
 
 class Run(object):
     def __init__(self,
@@ -1011,7 +1222,11 @@ class Run(object):
 
         raus.close()
 
-    def _run_hysplit(self, verbose=False):
+    # def _run_hysplit_conc(self):
+
+
+
+    def _run_hysplit_traj(self, verbose=False):
         os.chdir(self.settings.path2working_directory)
         try:
             process = subprocess.check_output(self.settings.path2executable, stderr=subprocess.STDOUT)
@@ -1046,8 +1261,12 @@ class Run(object):
 
     def run(self, verbose=False):
         self._create_control_file()
-        self._run_hysplit(verbose=verbose)
-        result = read_hysplit_output_file()
+        self._run_hysplit_traj(verbose=verbose)
+        if self.hysplit_mode == 'trajectory':
+            result = read_hysplit_traj_output_file()
+        elif self.hysplit_mode == 'concentration':
+            result = read_hysplit_conc_output_file()
+
         if len(result) == 1:
             result = result[0]
         self.result = result
@@ -1188,7 +1407,7 @@ class Trajectory_project_notuesedyet(object):
     def run(self, verbose=False):
         self._create_control_file()
         self._run_hysplit(verbose=verbose)
-        result = read_hysplit_output_file()
+        result = read_hysplit_traj_output_file()
         if len(result) == 1:
             result = result[0]
         self.result = result
@@ -1329,7 +1548,7 @@ class Concentration_projectnotusedyet(object):
     def run(self, verbose=False):
         self._create_control_file()
         self._run_hysplit(verbose=verbose)
-        result = read_hysplit_output_file()
+        result = read_hysplit_traj_output_file()
         if len(result) == 1:
             result = result[0]
         self.result = result

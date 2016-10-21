@@ -36,7 +36,7 @@ def read_hysplit_conc_output_file(fname='/Users/htelg/Hysplit4/working/cdump'):
     for index, row in dfin.iterrows():
         matrix.loc[row['LAT'], row['LON']] = row[thedata]
 
-    return HySplitConcentration(matrix)
+    return matrix
 
 
 def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
@@ -247,7 +247,7 @@ def plot_conc_on_map(concentration, resolution='c', back_ground = None, lat_c='a
             bmap.shadedrelief()
         elif back_ground == 'bluemarble':
             bmap.bluemarble()
-            bmap.lsmask[bmap.lsmask == 1] = 0
+            # bmap.lsmask[bmap.lsmask == 1] = 0
 
         elif back_ground == 'etopo':
             bmap.etopo()
@@ -272,6 +272,96 @@ def plot_conc_on_map(concentration, resolution='c', back_ground = None, lat_c='a
     f.colorbar(pc)
 
     return bmap
+
+def source_attribution_angular(concentration_instance, noang = 8):
+    """Calculates the ratio of aerosols comming form that particular solid angle."""
+
+    def calculate_initial_compass_bearing_vec(pointA, pointB):
+        """
+        Calculates the bearing between two points.
+        The formulae used is the following:
+            θ = atan2(sin(Δlong).cos(lat2),
+                      cos(lat1).sin(lat2) − sin(lat1).cos(lat2).cos(Δlong))
+        :Parameters:
+          - `pointA: The tuple representing the latitude/longitude for the
+            first point. Latitude and longitude must be in decimal degrees
+          - `pointB: The tuple representing the latitude/longitude for the
+            second point. Latitude and longitude must be in decimal degrees
+        :Returns:
+          The bearing in degrees
+        :Returns Type:
+          float
+        """
+        if (type(pointA) != tuple) or (type(pointB) != tuple):
+            raise TypeError("Only tuples are supported as arguments")
+
+        lat1 = _np.deg2rad(pointA[0])
+        lat2 = _np.deg2rad(pointB[0])
+
+        diffLong = _np.deg2rad(pointB[1] - pointA[1])
+
+        x = _np.sin(diffLong) * _np.cos(lat2)
+        y = _np.cos(lat1) * _np.sin(lat2) - (_np.sin(lat1)
+                * _np.cos(lat2) * _np.cos(diffLong))
+
+        initial_bearing = _np.arctan2(x, y)
+        # Now we have the initial bearing but math.atan2 return values
+        # from -180° to + 180° which is not what we want for a compass bearing
+        # The solution is to normalize the initial bearing as shown below
+        initial_bearing = _np.rad2deg(initial_bearing)
+
+        compass_bearing = (initial_bearing + 360) % 360
+
+        return compass_bearing
+
+    # pos1 = pos1a = (30,40)
+    # pos2 = pos2a = (np.array([30]),np.array([50]))
+    # calculate_initial_compass_bearing(pos1, pos1)
+    # calculate_initial_compass_bearing_vec(pos1a, pos2a)
+
+    # noang = 8
+    angbins = _np.linspace(0,360, noang +1)
+    angbincent = angbins[:-1]
+    angbins = angbins - (angbins[1]/2.)
+    angbins = (angbins + 360) % 360
+
+    df = _pd.DataFrame(_np.zeros(noang), index = angbincent)
+
+    data_conc = concentration_instance.concentration
+    pointA = tuple(concentration_instance._parent.parameters.starting_loc[0][0:2])
+    x_lon, y_lat = _np.meshgrid(data_conc.columns, data_conc.index)
+    cbv = calculate_initial_compass_bearing_vec(pointA, (y_lat, x_lon))
+    cbv[_np.logical_and(y_lat == pointA[0], x_lon == pointA[1])] = _np.nan # the origin will always be 0 and therefore gives a bias to 0 ... so I get rid of it
+
+    data_conc[_np.logical_and(y_lat == pointA[0], x_lon == pointA[1])] = _np.nan # the origin will always be 0 and therefore gives a bias to 0 ... so I get rid of it
+    data_conc /= data_conc.values[~_np.isnan(data_conc.values)].sum() #normalized
+    for e, center in enumerate(angbincent):
+        angle_range = angbins[e:e+2]
+        data = data_conc.copy()
+        with _np.errstate(invalid='ignore'):
+            data.values[_np.logical_or(cbv <= angle_range[0], cbv > angle_range[1])] = _np.nan
+        z = _np.ma.masked_invalid(data)
+        df.loc[center] = z.sum()
+
+    if df.values.sum() != 1.:
+        raise ValueError('This value has to be equal to 1. It is %s'%(df.sum()))
+    return Source_Attribution_Angular(df)
+
+class Source_Attribution_Angular(object):
+    def __init__(self, data):
+        self.source_attribution_angular = data
+
+    def plot(self):
+        df = self.source_attribution_angular
+        f, a = _plt.subplots(subplot_kw=dict(projection='polar'))
+        a.set_theta_zero_location("N")
+        a.set_theta_direction(-1)
+        bars = a.bar(_np.deg2rad(df.index), df.values, align='center')
+        imax = df.values.max()
+        for i, bar in zip(df.values[:, 0], bars):
+            bar.set_facecolor(_plt.cm.jet(i / imax))
+            bar.set_alpha(0.5)
+
 
 def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_c='auto', w='auto', h='auto', bmap=None, color_gradiant = True, verbose=False, **plt_kwargs):
     """Plots a map of the flight path
@@ -502,13 +592,15 @@ class HySplitTrajectory(object):
 
 
 class HySplitConcentration():
-    def __init__(self, matrix):
+    def __init__(self, parent, matrix):
+        self._parent = parent
         self.concentration = matrix
 
     def __len__(self):
         return 0
 
     plot = plot_conc_on_map
+    source_attribution_angular = source_attribution_angular
 
 
 class Parameter(object):
@@ -1266,6 +1358,7 @@ class Run(object):
             result = read_hysplit_traj_output_file()
         elif self.hysplit_mode == 'concentration':
             result = read_hysplit_conc_output_file()
+            result = HySplitConcentration(self, result)
 
         if len(result) == 1:
             result = result[0]

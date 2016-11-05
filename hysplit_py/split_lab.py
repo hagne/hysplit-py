@@ -8,6 +8,192 @@ import subprocess
 import os
 from matplotlib.colors import LinearSegmentedColormap as _LinearSegmentedColormap
 from matplotlib.colors import LogNorm as _LogNorm
+import ftplib
+from netCDF4 import Dataset as _Dataset
+import copy
+
+def save_result_netCDF(result, fname, leave_open=False):
+    file_mode = 'w'
+
+    try:
+        ni = _Dataset(fname, file_mode)
+    except RuntimeError:
+        if os.path.isfile(fname):
+            os.remove(fname)
+            ni = _Dataset(fname, file_mode)
+
+    # result = run.result
+
+    # concentration
+    data_v = result.concentration.values
+
+    # concentration.dimensions
+    lat_dim, lon_dim = data_v.shape
+    lat_dim = ni.createDimension('latitude', lat_dim)
+    lon_dim = ni.createDimension('longitude', lon_dim)
+
+    # concentration.vaiables
+    concentration_var = ni.createVariable('concentration', data_v.dtype, ('latitude', 'longitude'))
+    concentration_var[:] = data_v
+    concentration_var.units = 'particle concentration no/m^3'
+
+    lat_var = ni.createVariable('latitudes', result.concentration.index.dtype, 'latitude')
+    lat_var[:] = result.concentration.index.values
+    lat_var.units = 'degrees in decimals'
+
+    lon_var = ni.createVariable('longitudes', result.concentration.columns.dtype, 'longitude')
+    lon_var[:] = result.concentration.columns.values
+    lon_var.units = 'degrees in decimals'
+
+    # attributes
+    ni.run_settings = result.run_settings
+    ni.qc_reports = result.qc_reports
+
+    # todo: get rid of following once entire project is saved instead of result only
+    ni.start_loc = result._parent.parameters.starting_loc  # When saving the entire project (run) this should not be needed anymore
+
+    if leave_open:
+        #         pass
+        return ni
+    else:
+        ni.close()
+
+
+def load_result_netCDF(fname, leave_open=False):
+    ni = _Dataset(fname, 'r')
+
+    lat = ni.variables['latitudes']
+    lon = ni.variables['longitudes']
+
+    concentration = ni.variables['concentration']
+    data = _pd.DataFrame(concentration[:], index=lat[:], columns=lon[:])
+    data.columns.name = 'lon'
+    data.index.name = 'lat'
+
+    settings = ni.getncattr('run_settings')
+
+    start_loc = ni.getncattr('start_loc')
+    qc_reports = [ni.getncattr('qc_reports')]
+
+    # todo: get rid of following once entire project is saved instead of result only
+    parent = type("parent", (object,), {"parameters": type('parameters', (object,), {'starting_loc': [start_loc]})})
+
+    if leave_open:
+        pass
+    # return ni
+    else:
+        ni.close()
+
+    res = HySplitConcentration(parent, data)
+    res.qc_reports = qc_reports
+    return res
+
+
+def datetime_str2hysplittime(time_string = '2010-01-01 00:00:00'):
+    t = _pd.to_datetime(time_string)
+    return '{} {:02d} {:02d} {:02d} {:02d}'.format(str(t.year)[-2:], t.month, t.day, t.hour, t.minute)
+
+
+def date_str2file_name_list(start, stop, data_format):
+    """
+    Parameters
+    ----------
+    data_format: str [gdas1]
+    """
+    month = ['XXX', 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+
+    format_options = ['gdas1', 'gdas0p5', 'test']
+    if data_format not in format_options:
+        txt = 'data_formate has to be one of %s' % (format_options)
+        raise ValueError(txt)
+
+    if data_format == 'test':
+        return ['oct1618.BIN']
+
+    elif data_format == 'gdas1':
+        tdt = _pd.to_datetime(start)
+        year = str(tdt.year)[-2:]
+        week = ((tdt.day - 1) // 7) + 1
+        fname_s = 'gdas1.{}{}.w{}'.format(month[tdt.month], year, week)
+
+        stt = _pd.to_datetime(stop)
+        year = str(stt.year)[-2:]
+        week = ((stt.day - 1) // 7) + 1
+        fname_e = 'gdas1.{}{}.w{}'.format(month[stt.month], year, week)
+
+        if (stt - tdt) / _pd.to_timedelta(1, 's') >= 0:
+            direction = 1
+        else:
+            direction = -1
+
+        fname = [fname_s]
+        if fname_s != fname_e:
+            fname = [fname_s]
+            i = 0
+            stt = _pd.to_datetime(start)
+            while i in range(1000):
+                i += 1
+                stt = _pd.to_datetime(stt) + _pd.to_timedelta(direction, 'D')
+                year = str(stt.year)[-2:]
+                week = ((stt.day - 1) // 7) + 1
+                fname_t = 'gdas1.{}{}.w{}'.format(month[stt.month], year, week)
+                if fname_t not in fname:
+                    fname.append(fname_t)
+                # print('{}\t{}'.format(fname_t, fname_e))
+                if fname_t == fname_e:
+                    break
+
+    elif data_format == 'gdas0p5':
+        tdt = _pd.to_datetime(start)
+        fbase = '{}{:02d}{:02d}_gdas0p5'
+        fname_s = fbase.format(tdt.year, tdt.month, tdt.day)
+
+        stt = _pd.to_datetime(stop)
+        fname_e = fbase.format(stt.year, stt.month, stt.day) #'gdas1.{}{}.w{}'.format(month[stt.month], year, week)
+
+        if (stt - tdt) / _pd.to_timedelta(1, 's') >= 0:
+            direction = 1
+        else:
+            direction = -1
+
+        fname = [fname_s]
+        if fname_s != fname_e:
+            fname = [fname_s]
+            i = 0
+            stt = _pd.to_datetime(start)
+            while i in range(1000):
+                i += 1
+                stt = _pd.to_datetime(stt) + _pd.to_timedelta(direction, 'D')
+                fname_t = fbase.format(stt.year, stt.month, stt.day) #'gdas1.{}{}.w{}'.format(month[stt.month], year, week)
+                if fname_t not in fname:
+                    fname.append(fname_t)
+                # print('{}\t{}'.format(fname_t, fname_e))
+                if fname_t == fname_e:
+                    break
+
+    return fname
+
+def date_str2file_name(date_str, data_format):
+    """
+    Parameters
+    ----------
+    data_format: str [gdas1]
+    """
+    format_options = ['gdas1', 'test']
+    if data_format not in format_options:
+        txt = 'data_formate has to be one of %s' % (format_options)
+        raise ValueError(txt)
+
+    if data_format == 'test':
+        return ''
+
+    if data_format == 'gdas1':
+        tdt = _pd.to_datetime(date_str)
+        month = ['XXX', 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
+        year = str(tdt.year)[-2:]
+        week = ((tdt.day - 1) // 7) + 1
+        fname = 'gdas1.{}{}.w{}'.format(month[tdt.month], year, week)
+    return fname
 
 def read_hysplit_conc_output_file(fname='/Users/htelg/Hysplit4/working/cdump'):
     # os.chdir(self.settings.path2working_directory)
@@ -273,7 +459,7 @@ def plot_conc_on_map(concentration, resolution='c', back_ground = None, lat_c='a
 
     return bmap
 
-def source_attribution_angular(concentration_instance, noang = 8):
+def source_attribution_angular(concentration_instance, noang = 8, raise_error = False):
     """Calculates the ratio of aerosols comming form that particular solid angle."""
 
     def calculate_initial_compass_bearing_vec(pointA, pointB):
@@ -314,37 +500,53 @@ def source_attribution_angular(concentration_instance, noang = 8):
 
         return compass_bearing
 
-    # pos1 = pos1a = (30,40)
-    # pos2 = pos2a = (np.array([30]),np.array([50]))
-    # calculate_initial_compass_bearing(pos1, pos1)
-    # calculate_initial_compass_bearing_vec(pos1a, pos2a)
-
-    # noang = 8
-    angbins = _np.linspace(0,360, noang +1)
-    angbincent = angbins[:-1]
-    angbins = angbins - (angbins[1]/2.)
-    angbins = (angbins + 360) % 360
-
-    df = _pd.DataFrame(_np.zeros(noang), index = angbincent)
-
-    data_conc = concentration_instance.concentration
+    data_conc = concentration_instance.concentration.copy()
     pointA = tuple(concentration_instance._parent.parameters.starting_loc[0][0:2])
     x_lon, y_lat = _np.meshgrid(data_conc.columns, data_conc.index)
     cbv = calculate_initial_compass_bearing_vec(pointA, (y_lat, x_lon))
     cbv[_np.logical_and(y_lat == pointA[0], x_lon == pointA[1])] = _np.nan # the origin will always be 0 and therefore gives a bias to 0 ... so I get rid of it
 
-    data_conc[_np.logical_and(y_lat == pointA[0], x_lon == pointA[1])] = _np.nan # the origin will always be 0 and therefore gives a bias to 0 ... so I get rid of it
-    data_conc /= data_conc.values[~_np.isnan(data_conc.values)].sum() #normalized
-    for e, center in enumerate(angbincent):
-        angle_range = angbins[e:e+2]
-        data = data_conc.copy()
-        with _np.errstate(invalid='ignore'):
-            data.values[_np.logical_or(cbv <= angle_range[0], cbv > angle_range[1])] = _np.nan
-        z = _np.ma.masked_invalid(data)
-        df.loc[center] = z.sum()
+    concentration_instance.compass_bearings = cbv
 
-    if df.values.sum() != 1.:
-        raise ValueError('This value has to be equal to 1. It is %s'%(df.sum()))
+
+    data_conc[_np.logical_and(y_lat == pointA[0], x_lon == pointA[1])] = _np.nan # the origin will always be 0 and therefore gives a bias to 0 ... so I get rid of it
+    ############## new
+    data_conc[_np.isnan(data_conc)] = 0
+    data_conc /= data_conc.values.sum()
+
+    # noofbins = 8
+    hist, bedges = _np.histogram(cbv, weights=data_conc, bins=noang * 2, range=(0, 360))
+
+    # cycle and downsample
+    hist_sds = _np.roll(hist, 1).reshape(-1, 2).sum(axis=1)
+    bedges_sds = _np.append(bedges[1::2][-1], bedges[1::2])
+
+    center_sds = (bedges_sds[1:] + bedges_sds[:-1]) / 2
+    center_sds[0] = 0
+
+    df = _pd.DataFrame(hist_sds, index=center_sds)
+
+    ############### old
+    # data_conc /= data_conc.values[~_np.isnan(data_conc.values)].sum() #normalized
+    # for e, center in enumerate(angbincent):
+    #     angle_range = angbins[e:e+2]
+    #     data = data_conc.copy()
+    #     with _np.errstate(invalid='ignore'):
+    #         data.values[_np.logical_or(cbv <= angle_range[0], cbv > angle_range[1])] = _np.nan
+    #     z = _np.ma.masked_invalid(data)
+    #     df.loc[center] = z.sum()
+
+    tolerance = 0.05
+    if not (1 - tolerance) < df.values.sum() < (1. + tolerance):
+        if raise_error:
+            raise ValueError('This value has to be equal to 1. It is %s'%(df.sum()))
+        else:
+            txt = 'Sum over all probabilities has to be equal to 1. It is %s' % (df.sum())
+            # print(concentration_instance.qc_report)
+            # import pdb
+            # pdb.set_trace()
+            concentration_instance.qc_reports.append(txt)
+
     return Source_Attribution_Angular(df)
 
 class Source_Attribution_Angular(object):
@@ -356,7 +558,7 @@ class Source_Attribution_Angular(object):
         f, a = _plt.subplots(subplot_kw=dict(projection='polar'))
         a.set_theta_zero_location("N")
         a.set_theta_direction(-1)
-        bars = a.bar(_np.deg2rad(df.index), df.values, align='center')
+        bars = a.bar(_np.deg2rad(df.index), df.values, width= 2* _np.pi / df.shape[0],  align='center')
         imax = df.values.max()
         for i, bar in zip(df.values[:, 0], bars):
             bar.set_facecolor(_plt.cm.jet(i / imax))
@@ -591,17 +793,26 @@ class HySplitTrajectory(object):
     plot_on_map = plot_traj_on_map
 
 
-class HySplitConcentration():
+class HySplitConcentration(object):
     def __init__(self, parent, matrix):
         self._parent = parent
         self.concentration = matrix
+        self.qc_reports = []
+        #####
+        self.__source_attribution_angular = None
 
     def __len__(self):
         return 0
 
     plot = plot_conc_on_map
-    source_attribution_angular = source_attribution_angular
+    _get_source_attribution_angular = source_attribution_angular
+    save_netCDF = save_result_netCDF
 
+    @property
+    def source_attribution_angular(self):
+        if not self.__source_attribution_angular:
+            self.__source_attribution_angular = self._get_source_attribution_angular()
+        return self.__source_attribution_angular
 
 class Parameter(object):
     def __init__(self, parent, what):
@@ -631,6 +842,8 @@ class Parameter(object):
     def reset2default(self):
         self._dict['value'] = self._dict['default']
 
+    def _get_value(self):
+        return self._dict['value']
 
     def _set_value(self, value):
         if 'options' in self._dict.keys():
@@ -684,6 +897,7 @@ class Parameter(object):
 
 
 class Parameters(object):
+
     def __init__(self, parent):
         self._parent = parent
         self.pollutants = Pollutants(self)
@@ -691,6 +905,9 @@ class Parameters(object):
         # self.pollutants.add_pollutant('default')
         # self.concentration_grids.add_grid('default')
         self.predefined_scenes = Scenes(parent)
+
+    def __repr__(self):
+        return all_attributes2string(self, ignore=['predefined_scenes'])
 
     @property
     def start_time(self):
@@ -743,12 +960,27 @@ class Parameters(object):
         Parameter(self, 'control.top_of_model_domain')._set_value(data)
 
     @property
-    def input_met_file_names(self):
-        return Parameter(self, 'control.input_met_file_names')
+    def meterologic_data_format(self):
+        return Parameter(self, 'control.meterologic_data_format')
 
-    @input_met_file_names.setter
-    def input_met_file_names(self, data):
-        Parameter(self, 'control.input_met_file_names')._set_value(data)
+    @meterologic_data_format.setter
+    def meterologic_data_format(self, data):
+        Parameter(self, 'control.meterologic_data_format')._set_value(data)
+
+    @property
+    def input_met_file_names(self):
+        stop_time = _pd.to_datetime(self.start_time._get_value()) + _pd.to_timedelta(self.run_time._get_value(), 'H')
+        list = date_str2file_name_list(self.start_time._get_value(), stop_time, self.meterologic_data_format._get_value())
+        return list
+
+    @property
+    def input_met_data_folder(self):
+        """This is the base folder for all met files"""
+        return Parameter(self, 'control.input_met_data_folder')
+
+    # @input_met_file_names.setter
+    # def input_met_file_names(self, data):
+    #     Parameter(self, 'control.input_met_file_names')._set_value(data)
 
     @property
     def output_path(self):
@@ -789,8 +1021,8 @@ settings = {}
 
 #####
 ## control ... general
-settings['control.start_time'] = {'value': '00 00 00 00',
-                                  'default': '00 00 00 00',
+settings['control.start_time'] = {'value': '2010-01-01 00:00:00',
+                                  'default': '2010-01-01 00:00:00',
                                   'doc': ''}
 settings['control.num_starting_loc'] = {'value': 1,
                                         'default': 1,
@@ -807,9 +1039,36 @@ settings['control.vertical_motion_option'] = {'value': 0,
 settings['control.top_of_model_domain'] = {'value': 10000.0,
                                            'default': 10000.0,
                                            'doc': ''}
-settings['control.input_met_file_names'] = {'value': ['/Users/htelg/Hysplit4/working/oct1618.BIN'],
-                                            'default': ['/Users/htelg/Hysplit4/working/oct1618.BIN'],
+# settings['control.input_met_file_names'] = {'value': ['/Users/htelg/Hysplit4/working/oct1618.BIN'],
+#                                             'default': ['/Users/htelg/Hysplit4/working/oct1618.BIN'],
+#                                             'doc': ''}
+settings['control.input_met_data_folder'] = {'value': '/Volumes/HTelg_4TB_Backup/hysplit_met_files/',
+                                            'default': '/Volumes/HTelg_4TB_Backup/hysplit_met_files/',
                                             'doc': ''}
+
+settings['control.meterologic_data_format'] = {'value': 'test',
+                                               'default': 'test',
+                                               'doc': """Meteorology / ARL Data FTP / Archive
+
+
+The ARL web server contains several meteorological model data sets already converted into a HYSPLIT compatible format on the public directories. Direct access via FTP to these data files is "hardwired" into the GUI. Only an email address is required for the password to access the server. The "FTP menu" is locked until the FTP process is completed, at which point a message box will appear indicating the file name that was just transferred.
+
+The ARL analysis data archive consists of output from the Global Data Analysis System (GDAS) and the NAM Data Analysis System (NDAS - previously called EDAS) covering much of North America. Both data archives are available from 1997 in semi-monthly files (SM). The EDAS was saved at 80-km resolution every 3-h through 2003, and then at 40-km resolution (AWIPS 212 grid) starting in 2004. The GDAS (every 6-h) was saved on a hemispheric projection at 191-km resolution through the end of 2006. The new 1-degree and half-degree GDAS archive is available every three hours. See notes below for a more detailed discussion of each file.
+
+
+	1	EDAS :: 80 km 3P ( EDAS :: 40 km 3P (>=2004 SM 600 Mb) Semi-Monthly data files at three hour intervals on pressure surfaces
+	2	GDAS1 :: 1-deg 3P (>=2005 WK 600 Mb) Weekly files (W1=1-7; W2=8-14; W3=15-21; W4=22-28; W5=29-end) every three hours on pressure surfaces
+	3	GDAS0p5 :: 0.5-deg 3S (>=2010 DA 468 Mb) Daily files every three hours on the native GFS hybrid sigma coordinate system. Beginning July 28, 2010.
+	4	NAM12 :: 12-km 3P (>=2007 DA 395 Mb) Composite archive 0 to +6 hour forecasts appended into daily files for the CONUS at three hour intervals on pressure surfaces
+	5	NAMs :: 12 km 1S (>=2008 DA 994 Mb) Composite archive 0 to +6 hour forecasts appended into daily files for the CONUS at one hour intervals on sigma surfaces
+
+
+From the GUI it is necessary to enter the year, month, and data file period. Semi-monthly files are designated by 001 (1st through the 15th) and 002 (16th through the end of the month). Weekly files by the week number and the two-digit day for the daily files. The file names are created automatically.
+
+For earlier global archive data see  Meteorology - ARL Data FTP - Reanalysis.
+
+Additional information about the data archives on the ARL server can be found at the ARL web page.  """}
+
 settings['control.output_path'] = {'value': './tdump',
                                    'default': './tdump',
                                    'doc': ''}
@@ -900,24 +1159,28 @@ settings['control.concentration_grid.sampling_interval'] = {'value': [0,24, 0],
                                                                     'Each grid may have its own sampling or averaging interval. The interval can be of three different types: averaging (type=0), snapshot (type=1), or maximum (type=2). Averaging will produce output averaged over the specified interval. For instance, you may want to define a concentration grid that produces 24-hour average air concentrations for the duration of the simulation, which in the case of a 2-day simulation will result in 2 output maps, one for each day. Each defined grid can have a different output type and interval. Snapshot (or now) will give the instantaneous output at the output interval, and maximum will save the maximum concentration at each grid point over the duration of the output interval. Therefore, when a maximum concentration grid is defined, it is also required to define an identical snapshot or average grid over which the maximum will be computed. There is also the special case when the type value is less than zero. In that case the value represents the averaging time in hours and the output interval time represents the interval at which the average concentration is output. For instance, a setting of {-1 6 0} would output a one-hour average concentration every six hours.')}
 
 
-def all_attributes2string(obj):
+def all_attributes2string(obj, ignore = []):
     att_list = []
-    max_len = 0
+    max_length = 0
+    # print('before loop')
+    # print('dir', dir(obj))
+    # print('===========')
     for i in dir(obj):
         if i[0] == '_':
             continue
-        if len(i) > max_len:
-            max_len = len(i)
+        # print(i)
+        if i in ignore:
+            continue
+        if len(i) > max_length:
+            max_length = len(i)
 
     for i in dir(obj):
         if i[0] == '_':
             continue
-        no_char_full = 100
-        no_char_val = no_char_full - len(i)
-        char_no_I = 50
-        char_no_II = 100
-        #         print(i)
-        att_list.append('{i:<{max_len}}:  {value}'.format(i=i, max_len=max_len + 1, value=getattr(obj, i)))
+        if i in ignore:
+            continue
+        # no_char_full = 100
+        att_list.append('{i:<{max_len}}:  {value}'.format(i=i, max_len = max_length + 1, value=getattr(obj, i)))
     out = '\n'.join(att_list)
     return out
 
@@ -939,11 +1202,24 @@ run.parameters.concentration_grids.default"""
         self.center = self._parent._parent.starting_loc[0][:-1]  # starting location of first trajectory, not sure if you can run multiple location at once ... then this would have to be fixed (todo)!
         self.spacing = settings['control.concentration_grid.spacing']['default']
         self.span = settings['control.concentration_grid.span']['default']
-        self.output_path = settings['control.concentration_grid.output_path']['default']
+        # self.output_path = settings['control.concentration_grid.output_path']['default']
         self.vertical_concentration_levels_number = settings['control.concentration_grid.vertical_concentration_levels_number']['default']
         self.vertical_concentration_levels_height_of_each = settings['control.concentration_grid.vertical_concentration_levels_height_of_each']['default']
-        self.sampling_start_time = self._parent._parent.start_time
-        self.sampling_stop_time = settings['control.concentration_grid.sampling_stop_time']['default']
+        # self.sampling_start_time = self._parent._parent.start_time
+        # self.sampling_stop_time = settings['control.concentration_grid.sampling_stop_time']['default']
+
+    @property
+    def output_path(self):
+        return self._parent._parent.output_path
+
+    @property
+    def sampling_start_time(self):
+        return self._parent._parent.start_time
+
+    @property
+    def sampling_stop_time(self):
+        st_dt = _pd.to_datetime(self._parent._parent.start_time._get_value()) + _pd.to_timedelta(self._parent._parent.run_time._get_value(), 'H')
+        return '{}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}'.format(st_dt.year, st_dt.month, st_dt.day, st_dt.hour, st_dt.minute, st_dt.second)
 
     @property
     def sampling_interval(self):
@@ -960,12 +1236,15 @@ class ConcentrationGrids(object):
         self._parent = parent
 
     def __repr__(self):
-        out = ''
+        out = "\n==========\n"
         if len(self._grid_dict.keys()) == 0:
             out = 'no grids defined'
         else:
             for k in self._grid_dict.keys():
                 out += k + '\n'
+                out += "--------\n"
+                out += self._grid_dict[k].__repr__()
+        out += "\n==========\n"
         return out
 
     def __len__(self):
@@ -989,13 +1268,14 @@ class ConcentrationGrids(object):
 
 class Pollutant(object):
     def __repr__(self):
-        return all_attributes2string(self)
+        out =  all_attributes2string(self, ignore= ['remove_pollutant'])
+        return out
 
     def __init__(self, parent, name):
         self._parent = parent
         self._name = name
         self.emission_rate = settings['control.pollutant.emission_rate']['default']
-        self.hours_of_emission = settings['control.pollutant.hours_of_emission']['default']
+        self.hours_of_emission =  settings['control.pollutant.hours_of_emission']['default'] #self._parent._parent.run_time
         self.release_start_time = self._parent._parent.start_time
 
         self.deposition_particle_diameter = settings['control.pollutant.deposition_particle_diameter']['default']
@@ -1015,9 +1295,11 @@ class Pollutant(object):
         self.radioactive_decay = settings['control.pollutant.radioactive_decay']['default']
         self.pollutant_resuspension = settings['control.pollutant.pollutant_resuspension']['default']
 
+
     def remove_pollutant(self):
-        self._parent._pollutant_dict.pop(self._name)
-        delattr(self._parent, self._name)
+        pass
+        # self._parent._pollutant_dict.pop(self._name)
+        # delattr(self._parent, self._name)
 
 
 class Pollutants(object):
@@ -1026,12 +1308,15 @@ class Pollutants(object):
         self._parent = parent
 
     def __repr__(self):
-        out = ''
+        out = "\n==========\n"
         if len(self._pollutant_dict.keys()) == 0:
-            out = 'no pollutants defined'
+            out += 'no pollutants defined'
         else:
             for k in self._pollutant_dict.keys():
                 out += k + '\n'
+                out += "----------\n"
+                out += self._pollutant_dict[k].__repr__()
+        out += "\n==========\n"
         return out
 
     def __len__(self):
@@ -1068,7 +1353,11 @@ class Pollutants(object):
             pollutant.deposition_particle_density = 2.6 # density of SiO2
             pollutant.deposition_particle_shape = 1.
 
-        if deposition != 'dry':
+        if deposition == 'wet':
+            pollutant.wet_removal_in_cloud = 8.0e-5
+            pollutant.wet_removal_below_cloud = 8.0e-5
+
+        elif deposition != 'dry':
             txt = 'sorry, depositions other then dry are not implemented yet'
             raise ValueError(txt)
 
@@ -1081,13 +1370,13 @@ class Scenes(object):
         self.run.parameters.pollutants.add_pollutant_gas('default')
         self.run.parameters.concentration_grids.add_grid('default')
 
-        self.run.parameters.start_time = '00 00 00 00'
+        self.run.parameters.start_time = '1995-10-16 00:00:00'
         self.run.parameters.starting_loc = [[40.0, -90.0, 10.0]]
         self.run.parameters.run_time = 12
         self.run.parameters.vertical_motion_option = 0
         self.run.parameters.top_of_model_domain = 10000.0
-        self.run.parameters.input_met_file_names = ['/Users/htelg/Hysplit4/working/oct1618.BIN']
-        self.run.parameters.concentration_grids.default.sampling_interval = [0, 12, 0]
+        # self.run.parameters.input_met_file_names = ['/Users/htelg/Hysplit4/working/oct1618.BIN']
+        # self.run.parameters.concentration_grids.default.sampling_interval = [0, 12, 0]
         self.run.parameters.concentration_grids.default.spacing = [0.05, 0.05]
         self.run.parameters.concentration_grids.default.span = [30., 30.]
         self.run.parameters.concentration_grids.default.vertical_concentration_levels_height_of_each = 100
@@ -1103,10 +1392,43 @@ class Scenes(object):
         self.run.parameters.pollutants.default.hours_of_emission = 1.0
         self.run.parameters.pollutants.default.pollutant_resuspension = 0.0
         self.run.parameters.pollutants.default.radioactive_decay = 0.0
-        self.run.parameters.pollutants.default.release_start_time = "00 00 00 00"
+        # self.run.parameters.pollutants.default.release_start_time = "00 00 00 00"
         self.run.parameters.pollutants.default.wet_removal_below_cloud = 0.0
         self.run.parameters.pollutants.default.wet_removal_henrys_constant = 0.0
         self.run.parameters.pollutants.default.wet_removal_in_cloud = 0.0
+
+    def sgp_aerosol_accu_backwards_gdas1(self):
+        """ARM's SGP central facility, concentration for accumulation mode particles including wet deposition"""
+        self.run.parameters.meterologic_data_format = 'gdas1'
+        self.run.parameters.pollutants.add_pollutant_gas('default')
+        self.run.parameters.concentration_grids.add_grid('default')
+
+        self.run.parameters.start_time = '2012-01-01 00:00:00'
+        self.run.parameters.starting_loc = [[36.605, -97.485, 10.0]]
+        self.run.parameters.run_time = -12
+        self.run.parameters.vertical_motion_option = 0
+        self.run.parameters.top_of_model_domain = 10000.0
+        # self.run.parameters.input_met_file_names = ['/Users/htelg/Hysplit4/working/oct1618.BIN']
+        # self.run.parameters.concentration_grids.default.sampling_interval = [0, 12, 0]
+        self.run.parameters.concentration_grids.default.spacing = [0.05, 0.05]
+        self.run.parameters.concentration_grids.default.span = [60., 120.]
+        self.run.parameters.concentration_grids.default.vertical_concentration_levels_height_of_each = 100
+        self.run.parameters.pollutants.default.deposition_diffusivity_ratio = 0.0
+        self.run.parameters.pollutants.default.deposition_effective_henrys_constant = 0.0
+        self.run.parameters.pollutants.default.deposition_particle_density = 1.8
+        self.run.parameters.pollutants.default.deposition_particle_diameter = 0.29 #center of accumulation mode in Volume moment
+        self.run.parameters.pollutants.default.deposition_particle_shape = 1
+        self.run.parameters.pollutants.default.deposition_pollutant_molecular_weight = 0.0
+        self.run.parameters.pollutants.default.deposition_surface_reactivity_ratio = 0.0
+        self.run.parameters.pollutants.default.deposition_velocity = 0.0
+        self.run.parameters.pollutants.default.emission_rate = 1.
+        self.run.parameters.pollutants.default.hours_of_emission = 1.0
+        self.run.parameters.pollutants.default.pollutant_resuspension = 0.0
+        self.run.parameters.pollutants.default.radioactive_decay = 0.0
+        # self.run.parameters.pollutants.default.release_start_time = "00 00 00 00"
+        self.run.parameters.pollutants.default.wet_removal_below_cloud = 8.0e-05
+        self.run.parameters.pollutants.default.wet_removal_henrys_constant = 0.0
+        self.run.parameters.pollutants.default.wet_removal_in_cloud = 8.0e-05
 
 class Run(object):
     def __init__(self,
@@ -1224,6 +1546,7 @@ class Run(object):
         self.hysplit_mode = hysplit_mode
         self.parameters = Parameters(self)
 
+
         ######
         # self.parameters.start_time = start_time
         # self.parameters.num_starting_loc = num_starting_loc
@@ -1241,6 +1564,7 @@ class Run(object):
             self.settings.path2executable = '/Users/htelg/Hysplit4/working/hyts_std'
         elif self.hysplit_mode == 'concentration':
             self.settings.path2executable = '/Users/htelg/Hysplit4/working/hycs_std'
+            self.parameters.output_path = './cdump'
         else:
             txt = '{} is not an option for the hysplit_mode input parameter. Please choose one from {}'.format(self.hysplit_mode, str(hysplit_mode_options))
             raise ValueError(txt)
@@ -1248,9 +1572,85 @@ class Run(object):
         self.settings.path2working_directory = '/Users/htelg/Hysplit4/working/'
         self.settings.project_directory = os.getcwd()
 
+    def copy(self):
+        return copy.deepcopy(self)
+
+    def run_test(self, verbose = True):
+        test_result = True
+        all_found = True
+        txtl = ['Met files available:']
+        missing_files = []
+        for fn in self.parameters.input_met_file_names:
+            file = '{}{}/{}'.format(self.parameters.input_met_data_folder, self.parameters.meterologic_data_format, fn)
+            found = os.path.isfile(file)
+            if not found:
+                all_found = False
+                test_result = False
+                missing_files.append(fn)
+            txtl.append('{} ..... {}'.format(file, found))
+
+        txt = 'All met files present: %s' % all_found
+        txtl = [txt] + txtl
+
+        txt = 'Test result: %s' % test_result
+        txtl = [txt] + txtl
+        test_text = '\n'.join(txtl)
+        if verbose:
+            print(test_text)
+        return test_result, test_text, missing_files
+
+
+    def download_missing_meterologic_files(run, max_files = 10, verbose=False):
+        missing_files = run.run_test(verbose=False)[2]
+        if verbose:
+            print(missing_files)
+
+        if len(missing_files) == 0:
+            if verbose:
+                print('no missing files')
+            return
+
+        if len(missing_files) > max_files:
+            txt = 'the number of files needed to be downloaded exeeds the maximum set by the argument max_files. (#: {}, max_files: {}).'.format(len(missing_files), max_files)
+            raise ValueError(txt)
+
+        # Open ftp connection and change to particular folder
+        server = 'arlftp.arlhq.noaa.gov'
+        user = 'anonymous'
+        email = 'hagen.telg@noaa.gov'
+
+        ftp = ftplib.FTP(server, user, email)
+        base_dir = 'pub/archives/'
+        ftp_folder = '{}{}'.format(base_dir, run.parameters.meterologic_data_format)
+        ftp.cwd(ftp_folder)
+
+        listing = []
+        ftp.retrlines("LIST ./", listing.append)
+        listing = [i.split()[-1] for i in listing]
+
+        #     return ftp
+
+        # download missing files
+        for fn in missing_files:
+            # destination where to save file
+            if fn not in listing:
+                ftp.close()
+                txt = "{} not among available files: \n {}".format(fn, '\n'.join(listing))
+                raise ValueError(txt)
+
+            save2fname = '{}{}/{}'.format(run.parameters.input_met_data_folder, run.parameters.meterologic_data_format, fn)
+            dest_file = open(save2fname, 'wb')
+
+            # download and write to file
+            ftp.retrbinary('RETR ' + fn, dest_file.write)
+
+            dest_file.close()
+        ftp.close()
+        return
+
     def _create_control_file(self):
         raus = open(self.settings.path2working_directory + 'CONTROL', 'w')
-        raus.write(self.parameters.start_time + '\n')  # 1
+        raus.write(datetime_str2hysplittime(self.parameters.start_time._get_value()) + '\n')  # 1
         raus.write('{}\n'.format(self.parameters.num_starting_loc))  # 2
         raus.write('\n'.join(['{:0.2f} {:0.2f} {:0.1f}'.format(*i) for i in self.parameters.starting_loc]) + '\n')  # 3
         raus.write('{:d}\n'.format(self.parameters.run_time))  # 4
@@ -1258,9 +1658,10 @@ class Run(object):
         raus.write('{:0.1f}\n'.format(self.parameters.top_of_model_domain))  # 6
         raus.write('{:d}\n'.format(len(self.parameters.input_met_file_names)))  # 7
         for fn in self.parameters.input_met_file_names:
-            folder, file = os.path.split(fn)
-            raus.write(folder + '/' + '\n')  # 8
-            raus.write(file + '\n')  # 9
+            # folder, file = os.path.split(fn)
+            raus.write('{}{}/\n'.format(self.parameters.input_met_data_folder, self.parameters.meterologic_data_format))  # 8
+            # raus.write(folder + '/' + '\n')  # 8
+            raus.write(fn + '\n')  # 9
         if self.hysplit_mode == 'concentration':
 
             # Pollutants
@@ -1269,7 +1670,7 @@ class Run(object):
                 raus.write(pol._name + '\n')
                 raus.write('{}\n'.format(pol.emission_rate))
                 raus.write('{}\n'.format(pol.hours_of_emission))                            # line 13 in control
-                raus.write('{}\n'.format(pol.release_start_time))                           # line 14 in control
+                raus.write('{}\n'.format(datetime_str2hysplittime(pol.release_start_time._get_value()))) # line 14 in control
 
             # Grids
             raus.write('{}\n'.format(len(self.parameters.concentration_grids)))             # line 15 in control
@@ -1277,13 +1678,13 @@ class Run(object):
                 raus.write('{} {}\n'.format(*grid.center))                                  # line 16 in control
                 raus.write('{} {}\n'.format(*grid.spacing))                                 # line 17 in control
                 raus.write('{} {}\n'.format(*grid.span))                                    # line 18 in control
-                folder, file = os.path.split(grid.output_path)
+                folder, file = os.path.split(str(grid.output_path))
                 raus.write('{}/\n'.format(folder))                                          # line 19 in control
                 raus.write('{}\n'.format(file))                                             # line 20 in control
                 raus.write('{}\n'.format(grid.vertical_concentration_levels_number))        # line 21 in control
                 raus.write('{}\n'.format(grid.vertical_concentration_levels_height_of_each))# line 22 in control
-                raus.write('{}\n'.format(grid.sampling_start_time))                         # line 23 in control
-                raus.write('{}\n'.format(grid.sampling_stop_time))                          # line 24 in control
+                raus.write('{}\n'.format(datetime_str2hysplittime(grid.sampling_start_time._get_value())))                         # line 23 in control
+                raus.write('{}\n'.format(datetime_str2hysplittime(grid.sampling_stop_time)))                          # line 24 in control
                 raus.write('{} {} {}\n'.format(*grid.sampling_interval))                    # line 25 in control
 
             # Deposition ... has to be one for each pollutant, thats why I put them together
@@ -1335,7 +1736,8 @@ class Run(object):
                 txt += '\nError code is 24, this might mean that the control file was not found.'
 
             txt += '\n' + e.output.decode()
-            raise subprocess.CalledProcessError(txt)
+            # raise subprocess.CalledProcessError(txt, process)
+            raise ValueError(txt)
 
         self.result_stdout = process.decode()
 
@@ -1352,6 +1754,11 @@ class Run(object):
             raise HysplitError(txt)
 
     def run(self, verbose=False):
+        test = self.run_test(verbose = False)
+        if not test[0]:
+            txt = 'Test run failed. Make sure the test_run goes through before etempting a real run.'
+            raise ValueError(txt)
+
         self._create_control_file()
         self._run_hysplit_traj(verbose=verbose)
         if self.hysplit_mode == 'trajectory':
@@ -1363,6 +1770,7 @@ class Run(object):
         if len(result) == 1:
             result = result[0]
         self.result = result
+        self.result.run_settings = self.parameters.__repr__()
 
 class Trajectory_project_notuesedyet(object):
     def __init__(self,
@@ -1514,7 +1922,7 @@ class Concentration_projectnotusedyet(object):
                  vertical_motion_option=0,
                  top_of_model_domain=10000.0,
                  input_met_file_names=['/Users/htelg/Hysplit4/working/oct1618.BIN'],
-                 output_traj_file_name='./tdump', ):
+                 output_traj_file_name='./cdump', ):
 
         """
         This class sets up a Hysplit run

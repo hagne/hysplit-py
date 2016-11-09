@@ -549,6 +549,39 @@ def source_attribution_angular(concentration_instance, noang = 8, raise_error = 
 
     return Source_Attribution_Angular(df)
 
+
+def source_attribution_land_use(res, land_use):
+    """
+    Parameters
+    ----------
+    land_use: LandUseMap instance
+    """
+    ### generate land use map with the same dimentions like the concentration grid
+    res_tmp = res.concentration.copy()
+    res_tmp[:] = _np.nan
+    res_land_use = _pd.concat([land_use.land_use_data, res_tmp])
+    res_land_use.sort_index(inplace=True, ascending=False)
+    res_land_use.interpolate(method='nearest', axis=0, inplace=True)
+    res_land_use.interpolate(method='nearest', axis=1, inplace=True)
+    res_land_use_ds = res_land_use[res_tmp.columns]
+    res_land_use_ds = res_land_use_ds.loc[res_tmp.index]
+
+    ###
+
+    res_norm = res.concentration.copy()
+    res_norm[_np.isnan(res_norm)] = 0
+    res_norm /= res_norm.values.sum()
+
+    res_lu = _pd.DataFrame(land_use.legend.land_use_type.copy())
+    res_lu['concentration'] = _np.nan
+    for e, lu in enumerate(land_use.legend.land_use_type):
+        res_tmp = res_norm.copy()
+        res_tmp[res_land_use_ds != e] = 0
+        res_lu.loc[e, 'concentration'] = res_tmp.values.sum()
+    # print(bla)
+    #     break
+    return res_lu
+
 class Source_Attribution_Angular(object):
     def __init__(self, data):
         self.source_attribution_angular = data
@@ -564,6 +597,37 @@ class Source_Attribution_Angular(object):
             bar.set_facecolor(_plt.cm.jet(i / imax))
             bar.set_alpha(0.5)
 
+
+class Source_Attribution_Land_use(object):
+    def __init__(self, parent):
+        self._parent = parent
+        self.land_use_map = None
+        self.__source_attribution_land_use = None
+
+    @property
+    def source_attribution_land_use(self):
+        if not _np.any(self.__source_attribution_land_use):
+            if not self.land_use_map:
+                raise AttributeError('please set the attribute land_use_map with an LandUseMap instance.')
+            self.__source_attribution_land_use = source_attribution_land_use(self._parent, self.land_use_map)
+        return self.__source_attribution_land_use
+
+    def plot(self, low_lim=0.02, **kwargs):
+        #     lowlim = 0.02
+        res_lu = self.source_attribution_land_use.copy()
+        res_lu_other = res_lu[res_lu.concentration < low_lim].copy()
+        res_lu[res_lu.concentration < low_lim] = _np.nan
+        res_lu.dropna(inplace=True)
+        res_lu.set_value(res_lu.shape[1] + 1, 'land_use_type', 'Other')
+        res_lu.set_value(res_lu.shape[1] + 1, 'concentration', res_lu_other.concentration.sum())
+        res_lu.sort_values('concentration', inplace=True)
+
+        f, a = _plt.subplots()
+        out = a.pie(res_lu.concentration.values, labels=res_lu.land_use_type, autopct='%1.1f%%', **kwargs)
+        centre_circle = _plt.Circle((0, 0), 0.75, color='black', fc='white', linewidth=1.25)
+        a.add_artist(centre_circle)
+        a.set_aspect(1)
+        return a
 
 def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_c='auto', w='auto', h='auto', bmap=None, color_gradiant = True, verbose=False, **plt_kwargs):
     """Plots a map of the flight path
@@ -800,12 +864,16 @@ class HySplitConcentration(object):
         self.qc_reports = []
         #####
         self.__source_attribution_angular = None
+        # self.__source_attribution_land_use = None
+        #####
+        self.source_attribution_land_use = Source_Attribution_Land_use(self)
 
     def __len__(self):
         return 0
 
     plot = plot_conc_on_map
     _get_source_attribution_angular = source_attribution_angular
+    _get_source_attribution_land_use = source_attribution_land_use
     save_netCDF = save_result_netCDF
 
     @property
@@ -813,6 +881,12 @@ class HySplitConcentration(object):
         if not self.__source_attribution_angular:
             self.__source_attribution_angular = self._get_source_attribution_angular()
         return self.__source_attribution_angular
+
+    # @property
+    # def source_attribution_land_use(self):
+    #     if not self.__source_attribution_land_use:
+    #         self.__source_attribution_land_use = self._get_source_attribution_land_use()
+    #     return self.__source_attribution_land_use
 
 class Parameter(object):
     def __init__(self, parent, what):

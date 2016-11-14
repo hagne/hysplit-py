@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import pandas as _pd
 from copy import deepcopy
 import numpy as _np

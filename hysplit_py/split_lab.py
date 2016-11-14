@@ -466,12 +466,11 @@ def source_attribution_angular(concentration_instance, noang = 8, raise_error = 
         """
         Calculates the bearing between two points.
         The formulae used is the following:
-            theta = atan2(sin(Delta_long).cos(lat2),
-                      cos(lat1).sin(lat2) − sin(lat1).cos(lat2).cos(Delta_long))
+            theta = atan2(sin(Delta_long).cos(lat2),cos(lat1).sin(lat2) − sin(lat1).cos(lat2).cos(Delta_long))
         :Parameters:
-          - `pointA: The tuple representing the latitude/longitude for the
+          - pointA: The tuple representing the latitude/longitude for the
             first point. Latitude and longitude must be in decimal degrees
-          - `pointB: The tuple representing the latitude/longitude for the
+          - pointB: The tuple representing the latitude/longitude for the
             second point. Latitude and longitude must be in decimal degrees
         :Returns:
           The bearing in degrees

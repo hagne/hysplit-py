@@ -491,7 +491,7 @@ def source_attribution_angular(concentration_instance, noang = 8, raise_error = 
 
         initial_bearing = _np.arctan2(x, y)
         # Now we have the initial bearing but math.atan2 return values
-        # from -180° to + 180° which is not what we want for a compass bearing
+        # from -180deg to + 180deg which is not what we want for a compass bearing
         # The solution is to normalize the initial bearing as shown below
         initial_bearing = _np.rad2deg(initial_bearing)
 

@@ -8,5 +8,7 @@ setup(
     license='',
     author='Hagen Telg',
     author_email='hagen@hagnet.net',
-    description=''
+    description='',
+    install_requires = ['numpy', 'pandas', 'matplotlib', 'mpl_toolkits', 'geopy', 'ftplib', 'netCDF4', 'magic', 'gdal'],
+    # extra_requires=['newrelic'],
 )

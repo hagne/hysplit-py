@@ -2,9 +2,17 @@
 import pandas as _pd
 from copy import deepcopy
 import numpy as _np
+import warnings
+# try:
 from mpl_toolkits.basemap import Basemap as _Basemap
+
 import matplotlib.pylab as _plt
-from geopy.distance import vincenty
+try:
+    from geopy.distance import vincenty
+except ImportError:
+    txt = "geopy not available, some features of hysplit_py will not work"
+    warnings.warn(txt)
+
 import subprocess
 import os
 from matplotlib.colors import LinearSegmentedColormap as _LinearSegmentedColormap

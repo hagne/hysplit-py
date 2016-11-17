@@ -3,10 +3,19 @@ import pandas as _pd
 from copy import deepcopy
 import numpy as _np
 import warnings
-# try:
-from mpl_toolkits.basemap import Basemap as _Basemap
 
-import matplotlib.pylab as _plt
+try:
+    import matplotlib.pylab as _plt
+except:
+    txt = "matplotlib not available or not functioning properly, some features of hysplit_py will not work"
+    warnings.warn(txt)
+
+try:
+    from mpl_toolkits.basemap import Basemap as _Basemap
+except:
+    txt = "mpl_toolkits.basemap not available or not functioning properly, some features of hysplit_py will not work"
+    warnings.warn(txt)
+
 try:
     from geopy.distance import vincenty
 except ImportError:

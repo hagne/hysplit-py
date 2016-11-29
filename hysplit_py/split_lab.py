@@ -1069,9 +1069,9 @@ class Parameters(object):
         """This is the base folder for all met files"""
         return Parameter(self, 'control.input_met_data_folder')
 
-    # @input_met_file_names.setter
-    # def input_met_file_names(self, data):
-    #     Parameter(self, 'control.input_met_file_names')._set_value(data)
+    @input_met_data_folder.setter
+    def input_met_data_folder(self, data):
+        Parameter(self, 'control.input_met_data_folder')._set_value(data)
 
     @property
     def output_path(self):

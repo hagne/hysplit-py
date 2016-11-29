@@ -1081,6 +1081,14 @@ class Parameters(object):
     def output_path(self, data):
         Parameter(self, 'control.output_path')._set_value(data)
 
+    @property
+    def number_of_samples(self):
+        return Parameter(self, 'setup.number_of_samples')
+
+    @number_of_samples.setter
+    def number_of_samples(self, value):
+        Parameter(self, 'setup.number_of_samples')._set_value(value)
+
 
 class Settings(object):
     @property
@@ -1248,6 +1256,13 @@ settings['control.concentration_grid.sampling_interval'] = {'value': [0,24, 0],
                                                             'doc': ('Sampling interval: type hour minute\n'
                                                                     'Default: 0 24 0\n'
                                                                     'Each grid may have its own sampling or averaging interval. The interval can be of three different types: averaging (type=0), snapshot (type=1), or maximum (type=2). Averaging will produce output averaged over the specified interval. For instance, you may want to define a concentration grid that produces 24-hour average air concentrations for the duration of the simulation, which in the case of a 2-day simulation will result in 2 output maps, one for each day. Each defined grid can have a different output type and interval. Snapshot (or now) will give the instantaneous output at the output interval, and maximum will save the maximum concentration at each grid point over the duration of the output interval. Therefore, when a maximum concentration grid is defined, it is also required to define an identical snapshot or average grid over which the maximum will be computed. There is also the special case when the type value is less than zero. In that case the value represents the averaging time in hours and the output interval time represents the interval at which the average concentration is output. For instance, a setting of {-1 6 0} would output a one-hour average concentration every six hours.')}
+
+##########
+settings['setup.number_of_samples'] = {'value': 2500,
+                                         'default': 2500,
+                                         'doc': ('This is part of the advanced settings. In principle this is the numnber of trajectories that are calculated.'
+                                                  'A higher number will result in a better, less noisy, concentration map that of course takes more computational resources.'
+                                                  'This value is stored in the SETUP.CFG file under the parameter numpar.')}
 
 
 def all_attributes2string(obj, ignore = []):
@@ -1739,6 +1754,51 @@ class Run(object):
         ftp.close()
         return
 
+    def _create_setup_file(self):
+        raus = open(self.settings.path2working_directory + 'SETUP.CFG', 'w')
+        txt = """ &SETUP
+ tratio = 0.75,
+ initd = 0,
+ kpuff = 0,
+ khmax = 9999,
+ kmixd = 0,
+ kmix0 = 250,
+ kzmix = 0,
+ kdef = 0,
+ kbls = 1,
+ kblt = 0,
+ conage = 48,
+ numpar = {numpar},
+ qcycle = 0.0,
+ efile = '',
+ tkerd = 0.18,
+ tkern = 0.18,
+ ninit = 1,
+ ndump = 0,
+ ncycl = 0,
+ pinpf = 'PARINIT',
+ poutf = 'PARDUMP',
+ mgmin = 10,
+ kmsl = 0,
+ maxpar = 10000,
+ cpack = 1,
+ cmass = 0,
+ dxf = 1.0,
+ dyf = 1.0,
+ dzf = 0.01,
+ ichem = 0,
+ maxdim = 1,
+ kspl = 1,
+ krnd = 6,
+ frhs = 1.0,
+ frvs = 0.01,
+ frts = 0.1,
+ frhmax = 3.0,
+ splitf = 1.0,
+ /""".format(numpar = self.parameters.number_of_samples)
+        raus.write(txt)
+        raus.close()
+
     def _create_control_file(self):
         raus = open(self.settings.path2working_directory + 'CONTROL', 'w')
         raus.write(datetime_str2hysplittime(self.parameters.start_time._get_value()) + '\n')  # 1
@@ -1851,6 +1911,7 @@ class Run(object):
             raise ValueError(txt)
 
         self._create_control_file()
+        self._create_setup_file()
         self._run_hysplit_traj(verbose=verbose)
         if self.hysplit_mode == 'trajectory':
             result = read_hysplit_traj_output_file()

@@ -3,6 +3,10 @@ import pandas as _pd
 from copy import deepcopy
 import numpy as _np
 import warnings
+import os as _os
+import magic as _magic
+from mpl_toolkits.axes_grid1 import make_axes_locatable as _make_axes_locatable
+import matplotlib.animation as _animation
 
 try:
     import matplotlib.pylab as _plt
@@ -78,33 +82,65 @@ def save_result_netCDF(result, fname, leave_open=False):
 
 
 def load_result_netCDF(fname, leave_open=False):
-    ni = _Dataset(fname, 'r')
+    """Loads either a single file or e ensemple of files.
 
-    lat = ni.variables['latitudes']
-    lon = ni.variables['longitudes']
+    Arguments:
+    ----------
+    fname: string or list
+        This can either be single file name, a list of files, or a folder name. In case of a folder name all file will
+        be loaded"""
+    def load_single_file(fname):
+        if not os.path.isfile(fname):
+            return False
+        ftest = _magic.from_file(fname, mime = True)
+        if ftest != 'application/x-hdf':
+            return False
 
-    concentration = ni.variables['concentration']
-    data = _pd.DataFrame(concentration[:], index=lat[:], columns=lon[:])
-    data.columns.name = 'lon'
-    data.index.name = 'lat'
+        ni = _Dataset(fname, 'r')
 
-    settings = ni.getncattr('run_settings')
+        lat = ni.variables['latitudes']
+        lon = ni.variables['longitudes']
 
-    start_loc = ni.getncattr('start_loc')
-    qc_reports = [ni.getncattr('qc_reports')]
+        concentration = ni.variables['concentration']
+        data = _pd.DataFrame(concentration[:], index=lat[:], columns=lon[:])
+        data.columns.name = 'lon'
+        data.index.name = 'lat'
 
-    # todo: get rid of following once entire project is saved instead of result only
-    parent = type("parent", (object,), {"parameters": type('parameters', (object,), {'starting_loc': [start_loc]})})
+        settings = ni.getncattr('run_settings')
 
-    if leave_open:
-        pass
-    # return ni
-    else:
-        ni.close()
+        start_loc = ni.getncattr('start_loc')
+        qc_reports = [ni.getncattr('qc_reports')]
 
-    res = HySplitConcentration(parent, data)
-    res.qc_reports = qc_reports
-    return res
+        # todo: get rid of following once entire project is saved instead of result only
+        parent = type("parent", (object,), {"parameters": type('parameters', (object,), {'starting_loc': [start_loc]})})
+
+        if leave_open:
+            pass
+        # return ni
+        else:
+            ni.close()
+
+        res = HySplitConcentration(parent, data)
+        res.qc_reports = qc_reports
+        return res
+
+    if type(fname) == list:
+        file_list = fname
+    elif type(fname) == str:
+        if _os.path.isfile(fname):
+            return load_single_file(fname)
+
+        elif _os.path.isdir(fname):
+            file_list = _os.listdir(fname)
+            file_list = [fname + fn for fn in file_list]
+
+    res_dic = {}
+    for file in file_list:
+        res = load_single_file(file)
+        if type(res).__name__ == 'HySplitConcentration':
+            res_dic[file] = res
+
+    return HySplitConcentrationEnsemple(res_dic)
 
 
 def datetime_str2hysplittime(time_string = '2010-01-01 00:00:00'):
@@ -383,7 +419,21 @@ def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
 from matplotlib.collections import LineCollection
 
 
-def plot_conc_on_map(concentration, resolution='c', back_ground = None, lat_c='auto', lon_c='auto', w='auto', h='auto', zoom_out=2, bmap=None, verbose=False, **plt_kwargs):
+def plot_conc_on_map(concentration,
+                     resolution='c',
+                     back_ground = None,
+                     costlines = True,
+                     countries = True,
+                     states = False,
+                     lat_c='auto',
+                     lon_c='auto',
+                     w='auto',
+                     h='auto',
+                     zoom_out=2,
+                     colorbar = True,
+                     bmap=None,
+                     verbose=False,
+                     plt_kwargs = {}):
     """Plots a map of the flight path
 
     Note
@@ -392,19 +442,35 @@ def plot_conc_on_map(concentration, resolution='c', back_ground = None, lat_c='a
 
     Arguments
     ---------
-    color_gradiant: bool or colormap.
-        The trajectory can be plotted so it changes color in time. If True the standard cm map is used but you can also pass a cm map here, e.g. color_gradiant = plt.cm.jet
-    zoom_out: float or array-like of len==2
+    resolution: str, ['c']
+        Resolution of boundary database to use. Can be ``c`` (crude), ``l`` (low), ``i`` (intermediate), ``h`` (high),
+        ``f`` (full) or None.
     back_ground: str [shadedrelief, bluemarble, etopo]
+        Different maps that are plotted in the background
+    costlines: bool
+        If costlines should be drawn on map.
+    countries: bool
+        If borders between coutries should be drawn on map.
+    states: bool
+        If states boundaries should be drawn on map.
+    zoom_out: float or array-like of len==2
+    colorbar: bool
+        If colorbar is desired.
+    bmap: Basemap or AxesSubplot instance
     """
     data = concentration.concentration
     x_lon, y_lat = _np.meshgrid(data.columns, data.index)
 
-    if bmap:
+    if type(bmap).__name__ == 'Basemap':
         a = _plt.gca()
         f = a.get_figure()
+
     else:
-        f, a = _plt.subplots()
+        if type(bmap).__name__ == 'AxesSubplot':
+            a = bmap
+            f = a.get_figure()
+        else:
+            f, a = _plt.subplots()
 
         if _np.any(_np.array([lat_c, lon_c, w, h]) == 'auto'):
             # if 1:
@@ -456,9 +522,12 @@ def plot_conc_on_map(concentration, resolution='c', back_ground = None, lat_c='a
         elif back_ground == 'etopo':
             bmap.etopo()
 
-        costlines = bmap.drawcoastlines()
-        bmap.drawstates()
-        bmap.drawcountries()
+        if costlines:
+            bmap.drawcoastlines()
+        if states:
+            bmap.drawstates()
+        if countries:
+            bmap.drawcountries()
 
 
     # #draw paralles
@@ -473,9 +542,13 @@ def plot_conc_on_map(concentration, resolution='c', back_ground = None, lat_c='a
     z = _np.ma.masked_invalid(data.values)
     xm_lon, ym_lat = bmap(x_lon, y_lat)
     pc = a.pcolormesh(xm_lon, ym_lat, z, zorder=100, norm=_LogNorm(), alpha=0.6, cmap=_plt.cm.Accent, linewidth=0, rasterized=True, **plt_kwargs)
-    f.colorbar(pc)
+    if colorbar:
+        divider = _make_axes_locatable(a)
+        cax = divider.append_axes("right", size="5%", pad=0.1)
+        colorbar = f.colorbar(pc, cax = cax)
+        colorbar.set_label('Concentration (arb. u.)')
 
-    return bmap
+    return bmap, pc, colorbar
 
 def source_attribution_angular(concentration_instance, noang = 8, raise_error = False):
     """Calculates the ratio of aerosols comming form that particular solid angle."""
@@ -603,9 +676,13 @@ class Source_Attribution_Angular(object):
     def __init__(self, data):
         self.source_attribution_angular = data
 
-    def plot(self):
+    def plot(self, ax = None):
         df = self.source_attribution_angular
-        f, a = _plt.subplots(subplot_kw=dict(projection='polar'))
+        if ax:
+            a = ax
+            f = ax.get_figure()
+        else:
+            f, a = _plt.subplots(subplot_kw=dict(projection='polar'))
         a.set_theta_zero_location("N")
         a.set_theta_direction(-1)
         bars = a.bar(_np.deg2rad(df.index), df.values, width= 2* _np.pi / df.shape[0],  align='center')
@@ -613,6 +690,8 @@ class Source_Attribution_Angular(object):
         for i, bar in zip(df.values[:, 0], bars):
             bar.set_facecolor(_plt.cm.jet(i / imax))
             bar.set_alpha(0.5)
+
+        return a
 
 
 class Source_Attribution_Land_use(object):
@@ -904,6 +983,104 @@ class HySplitConcentration(object):
     #     if not self.__source_attribution_land_use:
     #         self.__source_attribution_land_use = self._get_source_attribution_land_use()
     #     return self.__source_attribution_land_use
+
+
+class HySplitConcentrationEnsemple(dict):
+    """Contains the result of multiple runs."""
+
+    def __init__(self, res_dict):
+        super().__init__(res_dict)
+        self._vmax = res_dict[max(res_dict, key=lambda x: res_dict[x].concentration.max().max())].concentration.max().max()
+        self._vmin = res_dict[min(res_dict, key=lambda x: res_dict[x].concentration.min().min())].concentration.min().min()
+        self._rmax = res_dict[max(res_dict, key=lambda x: res_dict[x].source_attribution_angular.source_attribution_angular.max().max())].source_attribution_angular.source_attribution_angular.max().max()
+        # res.source_attribution_angular.source_attribution_angular.max().max()
+
+    def __getitem__(self, key):
+        return super().__getitem__(key)
+
+    def __setitem__(self, key, value):
+        #         print(key,value)
+        vmax = value.concentration.max().max()
+        vmin = value.concentration.min().min()
+        if vmax > self._vmax:
+            self._vmax = vmax
+        if vmin < self._vmin:
+            self._vmin = vmin
+        return super().__getitem__(key, value)
+
+    def create_movie_concentration_distribution(self, fname, fps=12, dpi=50, test=False, **plot_kwargs):
+        # (360 *4)/60
+        FFMpegWriter = _animation.writers['ffmpeg']
+        metadata = dict(title='Hysplit dispersion movie', artist='Matplotlib',
+                        #                 comment=''
+                        )
+        writer = FFMpegWriter(fps=fps, metadata=metadata, codec = "libx264")
+
+        keys = list(self.keys())
+        keys.sort()
+        f, a = _plt.subplots()
+        writer.setup(f, fname, dpi)
+        plot_kwargs['bmap'] = a
+        #         import pdb; pdb.set_trace()
+        if 'plt_kwargs' in plot_kwargs.keys():
+            plt_kwargs_pcolor = plot_kwargs['plt_kwargs']
+        else:
+            plt_kwargs_pcolor = {}
+            plot_kwargs['plt_kwargs'] = plt_kwargs_pcolor
+        # plot_kwargs['plt_kwargs'] = {'vmin': self._vmin, 'vmax': self._vmax}
+        if 'vmin' not in plt_kwargs_pcolor.keys():
+            plt_kwargs_pcolor['vmin'] = self._vmin
+
+        if 'vmax' not in plt_kwargs_pcolor.keys():
+            plt_kwargs_pcolor['vmax'] = self._vmax
+
+        for key in keys:
+            res = self[key]
+            bmap, pc, cb = res.plot(**plot_kwargs)
+            fnt = _os.path.split(key)[-1]
+            a.set_title('{}-{}-{} {}:{}:{}'.format(fnt[:4], fnt[4:6], fnt[6:8], fnt[9:11], fnt[11:13], fnt[13:]))
+            writer.grab_frame()
+            if test:
+                break
+            else:
+                a.clear()
+                cb.remove()
+                #                 plot_kwargs['colorbar'] = False
+
+        writer.finish()
+        return bmap, pc, cb
+
+    def create_movie_sourceattribution_angular(self, fname, fps=12, dpi=50, test=False,
+                     #                  **plot_kwargs
+                     ):
+        FFMpegWriter = _animation.writers['ffmpeg']
+        metadata = dict(title='Hysplit source attribution (angular) movie', artist='Matplotlib',
+                        #                 comment=''
+                        )
+        writer = FFMpegWriter(fps=fps, metadata=metadata)
+
+        keys = list(self.keys())
+        keys.sort()
+        f, a = _plt.subplots(subplot_kw=dict(projection='polar'))
+        writer.setup(f, fname, dpi)
+
+        for key in keys:
+            res = self[key]
+            res.source_attribution_angular.plot(ax=a)
+            a.set_rlim((0, self._rmax))
+            fnt = _os.path.split(key)[-1]
+            txt = '{}-{}-{} {}:{}:{}'.format(fnt[:4], fnt[4:6], fnt[6:8], fnt[9:11], fnt[11:13], fnt[13:])
+            # a.set_title(txt)
+            plt_text = a.text(1.05, 1.01, txt, ha='right', transform=a.transAxes)
+            writer.grab_frame()
+            if test:
+                break
+            else:
+                a.clear()
+                #                 plot_kwargs['colorbar'] = False
+
+        writer.finish()
+        return f,a
 
 class Parameter(object):
     def __init__(self, parent, what):

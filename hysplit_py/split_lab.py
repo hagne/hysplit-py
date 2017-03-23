@@ -7,6 +7,7 @@ import os as _os
 import magic as _magic
 from mpl_toolkits.axes_grid1 import make_axes_locatable as _make_axes_locatable
 import matplotlib.animation as _animation
+from matplotlib import gridspec as _gridspec
 
 try:
     import matplotlib.pylab as _plt
@@ -670,6 +671,7 @@ def source_attribution_land_use(res, land_use):
         res_lu.loc[e, 'concentration'] = res_tmp.values.sum()
     # print(bla)
     #     break
+    res_lu.rename(columns={'concentration': 'ratio'}, inplace=True)
     return res_lu
 
 class Source_Attribution_Angular(object):
@@ -708,22 +710,62 @@ class Source_Attribution_Land_use(object):
             self.__source_attribution_land_use = source_attribution_land_use(self._parent, self.land_use_map)
         return self.__source_attribution_land_use
 
-    def plot(self, low_lim=0.02, **kwargs):
-        #     lowlim = 0.02
-        res_lu = self.source_attribution_land_use.copy()
-        res_lu_other = res_lu[res_lu.concentration < low_lim].copy()
-        res_lu[res_lu.concentration < low_lim] = _np.nan
-        res_lu.dropna(inplace=True)
-        res_lu.set_value(res_lu.shape[1] + 1, 'land_use_type', 'Other')
-        res_lu.set_value(res_lu.shape[1] + 1, 'concentration', res_lu_other.concentration.sum())
-        res_lu.sort_values('concentration', inplace=True)
+    def plot(self, style = 'pie', ax = None, low_lim=0.02, **kwargs):
+        """plot it
+        Parameters
+        ----------
+        style: str [pie, bar]
+            plotting style"""
 
-        f, a = _plt.subplots()
-        out = a.pie(res_lu.concentration.values, labels=res_lu.land_use_type, autopct='%1.1f%%', **kwargs)
-        centre_circle = _plt.Circle((0, 0), 0.75, color='black', fc='white', linewidth=1.25)
-        a.add_artist(centre_circle)
-        a.set_aspect(1)
+        if ax:
+            a = ax
+            f = a.get_figure()
+        else:
+            f, a = _plt.subplots()
+
+        if style == 'pie':
+            res_lu = self.source_attribution_land_use.copy()
+            res_lu_other = res_lu[res_lu.ratio < low_lim].copy()
+            res_lu[res_lu.ratio < low_lim] = _np.nan
+            res_lu.dropna(inplace=True)
+            res_lu.set_value(res_lu.shape[1] + 1, 'land_use_type', 'Other')
+            res_lu.set_value(res_lu.shape[1] + 1, 'ratio', res_lu_other.ratio.sum())
+            res_lu.sort_values('ratio', inplace=True)
+
+
+            out = a.pie(res_lu.ratio.values, labels=res_lu.land_use_type, autopct='%1.1f%%', **kwargs)
+            centre_circle = _plt.Circle((0, 0), 0.75, color='black', fc='white', linewidth=1.25)
+            a.add_artist(centre_circle)
+            a.set_aspect(1)
+
+        elif style == 'bar':
+            salud = self.source_attribution_land_use
+            a = salud.plot(kind='barh', width=0.9, ax = a)
+            a.yaxis.set_tick_params(pad=10)
+            bars = a.yaxis.set_ticklabels(salud.land_use_type)
+            leg = a.legend()
+            leg.remove()
+            a.set_xlabel('Ratio')
+        else:
+            raise ValueError('{} not available for style'.format(style))
         return a
+
+    # def plot(self, low_lim=0.02, **kwargs):
+    #     #     lowlim = 0.02
+    #     res_lu = self.source_attribution_land_use.copy()
+    #     res_lu_other = res_lu[res_lu.concentration < low_lim].copy()
+    #     res_lu[res_lu.concentration < low_lim] = _np.nan
+    #     res_lu.dropna(inplace=True)
+    #     res_lu.set_value(res_lu.shape[1] + 1, 'land_use_type', 'Other')
+    #     res_lu.set_value(res_lu.shape[1] + 1, 'concentration', res_lu_other.concentration.sum())
+    #     res_lu.sort_values('concentration', inplace=True)
+    #
+    #     f, a = _plt.subplots()
+    #     out = a.pie(res_lu.concentration.values, labels=res_lu.land_use_type, autopct='%1.1f%%', **kwargs)
+    #     centre_circle = _plt.Circle((0, 0), 0.75, color='black', fc='white', linewidth=1.25)
+    #     a.add_artist(centre_circle)
+    #     a.set_aspect(1)
+    #     return a
 
 def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_c='auto', w='auto', h='auto', bmap=None, color_gradiant = True, verbose=False, **plt_kwargs):
     """Plots a map of the flight path
@@ -972,6 +1014,37 @@ class HySplitConcentration(object):
     _get_source_attribution_land_use = source_attribution_land_use
     save_netCDF = save_result_netCDF
 
+    def plot_overview(self, conc_kwargs = {}, source_attr_angular_kwargs = {}, source_attr_land_kwargs = {}):
+        gs = _gridspec.GridSpec(2, 4,
+                               width_ratios=[0.8, 0.3, 0.1, 0.7],
+                               height_ratios=[1, 0.7],
+                               hspace=0.05
+                               )
+
+        ax_conc = _plt.subplot(gs[0:2])
+        ax_sa_ang = _plt.subplot(gs[3], projection='polar')
+        ax_sa_lu = _plt.subplot(gs[5:])
+        # ax4 = plt.subplot(gs[3])
+        f = ax_conc.get_figure()
+        fh = f.get_figheight()
+        fw = f.get_figwidth()
+        scale = 1.7
+        f.set_figheight(fh * scale)
+        f.set_figwidth(fw * scale)
+
+        # ax_sa_ang.set_title('20120109_000000', fontdict={'verticalalignment': 'bottom'})
+        # ax_sa_ang.text(1.05,1.15, '20120109_000000', ha = 'right', transform = ax_sa_ang.transAxes)
+        ax_conc.set_title('20120109_000000', loc='left')
+
+        self.plot(bmap=ax_conc, **conc_kwargs)
+
+        self.source_attribution_angular.plot(ax=ax_sa_ang, **source_attr_angular_kwargs)
+
+        self.source_attribution_land_use.plot(style='bar', ax=ax_sa_lu, **source_attr_land_kwargs)
+        f.subplots_adjust(left=0)
+        f.savefig('fig_test.png')
+        return f,(ax_conc, ax_sa_ang, ax_sa_lu)
+
     @property
     def source_attribution_angular(self):
         if not self.__source_attribution_angular:
@@ -990,10 +1063,56 @@ class HySplitConcentrationEnsemple(dict):
 
     def __init__(self, res_dict):
         super().__init__(res_dict)
-        self._vmax = res_dict[max(res_dict, key=lambda x: res_dict[x].concentration.max().max())].concentration.max().max()
-        self._vmin = res_dict[min(res_dict, key=lambda x: res_dict[x].concentration.min().min())].concentration.min().min()
-        self._rmax = res_dict[max(res_dict, key=lambda x: res_dict[x].source_attribution_angular.source_attribution_angular.max().max())].source_attribution_angular.source_attribution_angular.max().max()
+        self._vmax = None
+        self._vmin = None
+        self._rmax = None
+        self._rmax_lu = None
+        # self.vmax = res_dict[max(res_dict, key=lambda x: res_dict[x].concentration.max().max())].concentration.max().max()
+        # self.vmin = res_dict[min(res_dict, key=lambda x: res_dict[x].concentration.min().min())].concentration.min().min()
+        # self.rmax = res_dict[max(res_dict, key=lambda x: res_dict[x].source_attribution_angular.source_attribution_angular.max().max())].source_attribution_angular.source_attribution_angular.max().max()
         # res.source_attribution_angular.source_attribution_angular.max().max()
+        self._land_use_map = None
+
+    @property
+    def land_use_map(self):
+        if not self._land_use_map:
+            raise ValueError('Land use data not assigned yet, please do so.')
+        return self._land_use_map
+
+    @land_use_map.setter
+    def land_use_map(self, value):
+        for key in self:
+            rest = self[key]
+            rest.source_attribution_land_use.land_use_map = value
+
+    @property
+    def vmax(self):
+        """Maximum value in all concentratioins"""
+        if not self._vmax:
+            self._vmax = self[max(self, key=lambda x: self[x].concentration.max().max())].concentration.max().max()
+        return self._vmax
+
+    @property
+    def vmin(self):
+        """Minimum value in all concentrations"""
+        if not self._vmin:
+            self._vmin = self[min(self, key=lambda x: self[x].concentration.min().min())].concentration.min().min()
+        return self._vmin
+
+    @property
+    def rmax(self):
+        """Maximum ratio in the angular source attribution."""
+        if not self._rmax:
+            self._rmax = self[max(self, key=lambda x: self[x].source_attribution_angular.source_attribution_angular.max().max())].source_attribution_angular.source_attribution_angular.max().max()
+        return self._rmax
+
+    @property
+    def rmax_lu(self):
+        """Maximum ratio in the land use source attribution."""
+        if not self._rmax_lu:
+            self._rmax_lu = self[max(self, key=lambda x: self[
+                x].source_attribution_land_use.source_attribution_land_use.ratio.max())].source_attribution_land_use.source_attribution_land_use.ratio.max()
+        return self._rmax_lu
 
     def __getitem__(self, key):
         return super().__getitem__(key)
@@ -1004,8 +1123,8 @@ class HySplitConcentrationEnsemple(dict):
         vmin = value.concentration.min().min()
         if vmax > self._vmax:
             self._vmax = vmax
-        if vmin < self._vmin:
-            self._vmin = vmin
+        if vmin < self.vmin:
+            self.vmin = vmin
         return super().__getitem__(key, value)
 
     def create_movie_concentration_distribution(self, fname, fps=12, dpi=50, test=False, **plot_kwargs):
@@ -1014,7 +1133,10 @@ class HySplitConcentrationEnsemple(dict):
         metadata = dict(title='Hysplit dispersion movie', artist='Matplotlib',
                         #                 comment=''
                         )
-        writer = FFMpegWriter(fps=fps, metadata=metadata, codec = "libx264")
+        writer = FFMpegWriter(fps=fps, metadata=metadata,
+                              # bitrate=500,
+                              codec = "h264"
+                              )
 
         keys = list(self.keys())
         keys.sort()
@@ -1029,7 +1151,7 @@ class HySplitConcentrationEnsemple(dict):
             plot_kwargs['plt_kwargs'] = plt_kwargs_pcolor
         # plot_kwargs['plt_kwargs'] = {'vmin': self._vmin, 'vmax': self._vmax}
         if 'vmin' not in plt_kwargs_pcolor.keys():
-            plt_kwargs_pcolor['vmin'] = self._vmin
+            plt_kwargs_pcolor['vmin'] = self.vmin
 
         if 'vmax' not in plt_kwargs_pcolor.keys():
             plt_kwargs_pcolor['vmax'] = self._vmax
@@ -1057,7 +1179,9 @@ class HySplitConcentrationEnsemple(dict):
         metadata = dict(title='Hysplit source attribution (angular) movie', artist='Matplotlib',
                         #                 comment=''
                         )
-        writer = FFMpegWriter(fps=fps, metadata=metadata)
+        writer = FFMpegWriter(fps=fps, metadata=metadata,
+                              # bitrate=500,
+                              codec = "h264")
 
         keys = list(self.keys())
         keys.sort()
@@ -1067,7 +1191,7 @@ class HySplitConcentrationEnsemple(dict):
         for key in keys:
             res = self[key]
             res.source_attribution_angular.plot(ax=a)
-            a.set_rlim((0, self._rmax))
+            a.set_rlim((0, self.rmax))
             fnt = _os.path.split(key)[-1]
             txt = '{}-{}-{} {}:{}:{}'.format(fnt[:4], fnt[4:6], fnt[6:8], fnt[9:11], fnt[11:13], fnt[13:])
             # a.set_title(txt)
@@ -1081,6 +1205,97 @@ class HySplitConcentrationEnsemple(dict):
 
         writer.finish()
         return f,a
+
+    def create_movie_sourceattribution_land_use(self, fname, fps=12, dpi=50, test=False,
+                     #                  **plot_kwargs
+                     ):
+        FFMpegWriter = _animation.writers['ffmpeg']
+        metadata = dict(title='Hysplit source attribution (land use) movie', artist='Matplotlib',
+                        #                 comment=''
+                        )
+        writer = FFMpegWriter(fps=fps, metadata=metadata,
+                              # bitrate=500,
+                              codec = "h264")
+
+        keys = list(self.keys())
+        keys.sort()
+        f, a = _plt.subplots()#subplot_kw=dict(projection='polar'))
+        fw = f.get_figwidth()
+        f.set_figwidth(fw * 1.5)
+        f.subplots_adjust(left=0.35)
+        writer.setup(f, fname, dpi)
+
+        for key in keys:
+            res = self[key]
+            res.source_attribution_land_use.plot(style='bar', ax = a)
+            a.set_xlim((0, self.rmax_lu))
+            fnt = _os.path.split(key)[-1]
+            txt = '{}-{}-{} {}:{}:{}'.format(fnt[:4], fnt[4:6], fnt[6:8], fnt[9:11], fnt[11:13], fnt[13:])
+            a.set_title(txt)
+            # plt_text = a.text(1.05, 1.01, txt, ha='right', transform=a.transAxes)
+            writer.grab_frame()
+            if test:
+                break
+            else:
+                a.clear()
+                #                 plot_kwargs['colorbar'] = False
+
+        writer.finish()
+        return f,a
+
+    def create_movie_overview(self, fname, fps=12, dpi=50, test=False, conc_kwargs = {}, source_attr_angular_kwargs = {}, source_attr_land_kwargs = {}):
+        FFMpegWriter = _animation.writers['ffmpeg']
+        metadata = dict(title='Hysplit overview movie', artist='Matplotlib',
+                        #                 comment=''
+                        )
+        writer = FFMpegWriter(fps=fps, metadata=metadata,
+                              # bitrate=500,
+                              codec = "h264")
+
+        keys = list(self.keys())
+        keys.sort()
+        gs = _gridspec.GridSpec(2, 4,
+                               width_ratios=[0.8, 0.3, 0.1, 0.7],
+                               height_ratios=[1, 0.7],
+                               hspace=0.05
+                               )
+
+        ax_conc = _plt.subplot(gs[0:2])
+        ax_sa_ang = _plt.subplot(gs[3], projection='polar')
+        ax_sa_lu = _plt.subplot(gs[5:])
+
+        f = ax_conc.get_figure()
+        fh = f.get_figheight()
+        fw = f.get_figwidth()
+        scale = 1.7
+        f.set_figheight(fh * scale)
+        f.set_figwidth(fw * scale)
+
+        writer.setup(f, fname, dpi)
+
+        for key in keys:
+            res = self[key]
+            res.plot(bmap=ax_conc, **conc_kwargs)
+            res.source_attribution_angular.plot(ax=ax_sa_ang, **source_attr_angular_kwargs)
+            ax_sa_ang.set_rlim((0, self.rmax))
+            res.source_attribution_land_use.plot(style='bar', ax=ax_sa_lu, **source_attr_land_kwargs)
+            ax_sa_lu.set_xlim((0, self.rmax_lu))
+
+            fnt = _os.path.split(key)[-1]
+            txt = '{}-{}-{} {}:{}:{}'.format(fnt[:4], fnt[4:6], fnt[6:8], fnt[9:11], fnt[11:13], fnt[13:])
+            ax_conc.set_title(txt, loc='left')
+            # plt_text = a.text(1.05, 1.01, txt, ha='right', transform=a.transAxes)
+            writer.grab_frame()
+            if test:
+                break
+            else:
+                ax_conc.clear()
+                ax_sa_ang.clear()
+                ax_sa_lu.clear()
+                conc_kwargs['colorbar'] = False
+
+        writer.finish()
+        return f,(ax_conc, ax_sa_ang, ax_sa_lu)
 
 class Parameter(object):
     def __init__(self, parent, what):

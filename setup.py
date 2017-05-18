@@ -1,9 +1,9 @@
-from distutils.core import setup
+from setuptools import setup#, find_packages
 
 setup(
     name='hysplit-py',
     version='',
-    packages=['hysplit_py'],
+    packages=['hysplit_py'], #find_packages()
     url='',
     license='',
     author='Hagen Telg',

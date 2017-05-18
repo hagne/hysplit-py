@@ -1067,11 +1067,9 @@ class HySplitConcentrationEnsemple(dict):
         self._vmin = None
         self._rmax = None
         self._rmax_lu = None
-        # self.vmax = res_dict[max(res_dict, key=lambda x: res_dict[x].concentration.max().max())].concentration.max().max()
-        # self.vmin = res_dict[min(res_dict, key=lambda x: res_dict[x].concentration.min().min())].concentration.min().min()
-        # self.rmax = res_dict[max(res_dict, key=lambda x: res_dict[x].source_attribution_angular.source_attribution_angular.max().max())].source_attribution_angular.source_attribution_angular.max().max()
-        # res.source_attribution_angular.source_attribution_angular.max().max()
         self._land_use_map = None
+        self._source_attribution_angular = None
+        self._source_attribution_landuse = None
 
     @property
     def land_use_map(self):
@@ -1113,6 +1111,43 @@ class HySplitConcentrationEnsemple(dict):
             self._rmax_lu = self[max(self, key=lambda x: self[
                 x].source_attribution_land_use.source_attribution_land_use.ratio.max())].source_attribution_land_use.source_attribution_land_use.ratio.max()
         return self._rmax_lu
+
+    @property
+    def source_attribution_angular(self):
+        if type(self._source_attribution_angular).__name__ == 'NoneType':
+            saa = _pd.DataFrame()
+            for fname in self:
+                res = self[fname]
+                fnt = os.path.split(fname)[-1]
+                txt = '{}-{}-{} {}:{}:{}'.format(fnt[:4], fnt[4:6], fnt[6:8], fnt[9:11], fnt[11:13], fnt[13:])
+                data = res.source_attribution_angular.source_attribution_angular.copy()
+                data.columns = [_pd.Timestamp(txt)]
+                saa = saa.append(data.transpose())
+
+            saa.sort_index(inplace=True)
+            self._source_attribution_angular = saa
+        return self._source_attribution_angular
+
+    @property
+    def source_attribution_landuse(self):
+        if type(self._source_attribution_landuse).__name__ == 'NoneType':
+            saa = _pd.DataFrame()
+            for fname in self:
+                res = self[fname]
+
+                fnt = os.path.split(fname)[-1]
+                txt = '{}-{}-{} {}:{}:{}'.format(fnt[:4], fnt[4:6], fnt[6:8], fnt[9:11], fnt[11:13], fnt[13:])
+                data = res.source_attribution_land_use.source_attribution_land_use.copy()
+                data.index = data.land_use_type
+                data.drop(['land_use_type'], axis=1, inplace=True)
+
+                data.columns = [_pd.Timestamp(txt)]
+                saa = saa.append(data.transpose())
+
+
+            saa.sort_index(inplace=True)
+            self._source_attribution_landuse = saa
+        return self._source_attribution_landuse
 
     def __getitem__(self, key):
         return super().__getitem__(key)

@@ -10,8 +10,8 @@ setup(
     author_email='hagen@hagnet.net',
     description='',
     install_requires = ['numpy', 'pandas', 'matplotlib', 'mpl_toolkits', 'geopy', 'ftplib', 'netCDF4', 'magic',
-                        'osgeo',
-                        # 'gdal'
+                        # 'osgeo',
+                        'gdal'
                         ],
     # extra_requires=['newrelic'],
 )

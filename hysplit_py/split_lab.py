@@ -1900,6 +1900,7 @@ class Scenes(object):
 
     def hysplit_example(self):
         """this is the default hysplit example for concentration simulations"""
+        self.run.parameters.meterologic_data_format = 'test'
         self.run.parameters.pollutants.add_pollutant_gas('default')
         self.run.parameters.concentration_grids.add_grid('default')
 
@@ -2207,7 +2208,7 @@ class Run(object):
  poutf = 'PARDUMP',
  mgmin = 10,
  kmsl = 0,
- maxpar = 10000,
+ maxpar = {numpar},
  cpack = 1,
  cmass = 0,
  dxf = 1.0,
@@ -2222,7 +2223,8 @@ class Run(object):
  frts = 0.1,
  frhmax = 3.0,
  splitf = 1.0,
- /""".format(numpar = self.parameters.number_of_samples)
+ /
+ """.format(numpar = self.parameters.number_of_samples)
         raus.write(txt)
         raus.close()
 

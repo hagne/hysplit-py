@@ -2345,7 +2345,7 @@ class Run(object):
         if self.hysplit_mode == 'trajectory':
             result = read_hysplit_traj_output_file()
         elif self.hysplit_mode == 'concentration':
-            result = read_hysplit_conc_output_file()
+            result = read_hysplit_conc_output_file(self.settings.path2working_directory + 'cdump')
             result = HySplitConcentration(self, result)
 
         if len(result) == 1:

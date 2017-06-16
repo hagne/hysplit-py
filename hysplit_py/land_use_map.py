@@ -7,7 +7,7 @@ import matplotlib.pylab as plt
 
 
 def read_file(fname, filetype=None):
-
+    """I think that will work only with the particular I originally use, which I found somewhere here: https://landcover.usgs.gov/landcoverdata.php"""
     #######
     # this is in order to read the internal map ... not used anymore
     # lat = np.linspace(89, -90, 180)

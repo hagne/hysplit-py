@@ -8,6 +8,7 @@ import magic as _magic
 from mpl_toolkits.axes_grid1 import make_axes_locatable as _make_axes_locatable
 import matplotlib.animation as _animation
 from matplotlib import gridspec as _gridspec
+import xarray as _xr
 
 try:
     import matplotlib.pylab as _plt
@@ -35,54 +36,73 @@ import ftplib
 from netCDF4 import Dataset as _Dataset
 import copy
 
-def save_result_netCDF(result, fname, leave_open=False):
-    file_mode = 'w'
-
-    try:
-        ni = _Dataset(fname, file_mode)
-    except RuntimeError:
-        if os.path.isfile(fname):
-            os.remove(fname)
-            ni = _Dataset(fname, file_mode)
-
-    # result = run.result
-
-    # concentration
-    data_v = result.concentration.values
-
-    # concentration.dimensions
-    lat_dim, lon_dim = data_v.shape
-    lat_dim = ni.createDimension('latitude', lat_dim)
-    lon_dim = ni.createDimension('longitude', lon_dim)
-
-    # concentration.vaiables
-    concentration_var = ni.createVariable('concentration', data_v.dtype, ('latitude', 'longitude'))
-    concentration_var[:] = data_v
-    concentration_var.units = 'particle concentration no/m^3'
-
-    lat_var = ni.createVariable('latitudes', result.concentration.index.dtype, 'latitude')
-    lat_var[:] = result.concentration.index.values
-    lat_var.units = 'degrees in decimals'
-
-    lon_var = ni.createVariable('longitudes', result.concentration.columns.dtype, 'longitude')
-    lon_var[:] = result.concentration.columns.values
-    lon_var.units = 'degrees in decimals'
-
-    # attributes
-    ni.run_settings = result.run_settings
-    ni.qc_reports = result.qc_reports
+def save_result_netCDF(result, fname, data_version = 0.2
+                       # leave_open=False
+                       ):
+    ds = result.concentration.to_dataset('concentration')
+    ds.attrs['data_version'] = data_version
+    ds.attrs['run_settings'] = result.run_settings
+    ds.attrs['qc_reports'] = result.qc_reports
 
     # todo: get rid of following once entire project is saved instead of result only
-    ni.start_loc = result._parent.parameters.starting_loc  # When saving the entire project (run) this should not be needed anymore
+    ds.attrs['start_loc'] = str(result._parent.parameters.starting_loc)  # When saving the entire project (run) this should not be needed anymore
+    ds.attrs['start_time'] = str(result._parent.parameters.starting_loc)  # When saving the entire project (run) this should not be needed anymore
 
-    if leave_open:
-        #         pass
-        return ni
-    else:
-        ni.close()
+    ds.to_netcdf(fname)
+
+    # result.concentration.attrs['run_settings'] = result.run_settings
+    # result.concentration.attrs['qc_reports'] = result.qc_reports
+    #
+    # result.concentration.to_netcdf(fname)
 
 
-def load_result_netCDF(fname, leave_open=False):
+    # file_mode = 'w'
+    #
+    # try:
+    #     ni = _Dataset(fname, file_mode)
+    # except RuntimeError:
+    #     if os.path.isfile(fname):
+    #         os.remove(fname)
+    #         ni = _Dataset(fname, file_mode)
+    #
+    # # result = run.result
+    #
+    # # concentration
+    # data_v = result.concentration.values
+    #
+    # # concentration.dimensions
+    # lat_dim, lon_dim = data_v.shape
+    # lat_dim = ni.createDimension('latitude', lat_dim)
+    # lon_dim = ni.createDimension('longitude', lon_dim)
+    #
+    # # concentration.vaiables
+    # concentration_var = ni.createVariable('concentration', data_v.dtype, ('latitude', 'longitude'))
+    # concentration_var[:] = data_v
+    # concentration_var.units = 'particle concentration no/m^3'
+    #
+    # lat_var = ni.createVariable('latitudes', result.concentration.index.dtype, 'latitude')
+    # lat_var[:] = result.concentration.index.values
+    # lat_var.units = 'degrees in decimals'
+    #
+    # lon_var = ni.createVariable('longitudes', result.concentration.columns.dtype, 'longitude')
+    # lon_var[:] = result.concentration.columns.values
+    # lon_var.units = 'degrees in decimals'
+
+    # attributes
+    # ni.run_settings = result.run_settings
+    # ni.qc_reports = result.qc_reports
+    #
+    # # todo: get rid of following once entire project is saved instead of result only
+    # ni.start_loc = result._parent.parameters.starting_loc  # When saving the entire project (run) this should not be needed anymore
+
+    # if leave_open:
+    #     #         pass
+    #     return ni
+    # else:
+    #     ni.close()
+
+
+def open_result_netCDF(fname, leave_open=False):
     """Loads either a single file or e ensemple of files.
 
     Arguments:
@@ -97,32 +117,50 @@ def load_result_netCDF(fname, leave_open=False):
         if ftest != 'application/x-hdf':
             return False
 
-        ni = _Dataset(fname, 'r')
+        data_nc = _xr.open_dataset(fname)
 
-        lat = ni.variables['latitudes']
-        lon = ni.variables['longitudes']
-
-        concentration = ni.variables['concentration']
-        data = _pd.DataFrame(concentration[:], index=lat[:], columns=lon[:])
-        data.columns.name = 'lon'
-        data.index.name = 'lat'
-
-        settings = ni.getncattr('run_settings')
-
-        start_loc = ni.getncattr('start_loc')
-        qc_reports = [ni.getncattr('qc_reports')]
+        settings = data_nc.attrs['run_settings']
+        start_loc = data_nc.attrs['start_loc']
+        qc_reports = data_nc.attrs['qc_reports']
 
         # todo: get rid of following once entire project is saved instead of result only
         parent = type("parent", (object,), {"parameters": type('parameters', (object,), {'starting_loc': [start_loc]})})
 
-        if leave_open:
-            pass
-        # return ni
+        if 'start_time' in data_nc.attrs.keys():
+            parent.parameters.start_time = data_nc.attrs['start_time']
+
+        if 'time' not in data_nc.variables.keys():
+            data = _pd.DataFrame(data_nc.concentration.values, index=data_nc.latitudes.values, columns=data_nc.longitudes.values)
+            data.index.name = 'latitude'
+            data.columns.name = 'longitude'
         else:
-            ni.close()
+            data = data_nc.concentration
+
+        # ni = _Dataset(fname, 'r')
+        #
+        # lat = ni.variables['latitudes']
+        # lon = ni.variables['longitudes']
+        #
+        # concentration = ni.variables['concentration']
+        # data = _pd.DataFrame(concentration[:], index=lat[:], columns=lon[:])
+        # data.columns.name = 'lon'
+        # data.index.name = 'lat'
+
+        # settings = ni.getncattr('run_settings')
+        #
+        # start_loc = ni.getncattr('start_loc')
+        # qc_reports = [ni.getncattr('qc_reports')]
+
+        # if leave_open:
+        #     pass
+        # # return ni
+        # else:
+        #     ni.close()
 
         res = HySplitConcentration(parent, data)
         res.qc_reports = qc_reports
+        res.run_settings_all = settings
+        res.run_parameters = parent.parameters
         return res
 
     if type(fname) == list:
@@ -262,7 +300,14 @@ def read_hysplit_conc_output_file(fname='/Users/htelg/Hysplit4/working/cdump'):
     dfin = _pd.read_csv(fname + '.txt')
     dfin.columns = [i.strip() for i in dfin.columns]
 
-    thedata = dfin.columns[-1]
+    thedatacolumn = dfin.columns[-1]
+    HR = dfin.HR
+    HR = HR.map('{:04d}'.format)
+    HR = HR.str.slice(0, 2) + ':' + HR.str.slice(2, 4) + ':00'
+
+    dtime = dfin.YEAR.map('{:04d}'.format) + '-' + dfin.MO.map('{:02d}'.format) + '-' + dfin.DA.map(
+        '{:02d}'.format) + ' ' + HR
+    dfin.index = dtime
 
     lon = dfin.LON.unique()
     lon.sort()
@@ -274,10 +319,38 @@ def read_hysplit_conc_output_file(fname='/Users/htelg/Hysplit4/working/cdump'):
     matrix.index.name = 'lat'
     matrix.columns.name = 'lon'
 
-    for index, row in dfin.iterrows():
-        matrix.loc[row['LAT'], row['LON']] = row[thedata]
+    if len(dtime.unique()) == 1:
+        for index, row in dfin.iterrows():
+            matrix.loc[row['LAT'], row['LON']] = row[thedatacolumn]
 
-    return matrix
+        return matrix
+
+    else:
+        time = _pd.to_datetime(dtime.unique()) #pd.to_datetime(list(matrix_dict.keys()))  #
+        dimtime = time.shape[0]
+        dimlon = lon.shape[0]
+        dimlat = lat.shape[0]
+        data = _np.zeros((dimtime, dimlat, dimlon))
+
+        data_da = _xr.DataArray(data, coords=[time, lat, lon], dims=['time', 'latitude', 'longitude'])
+
+        for e,t in enumerate(time):
+            dfinsub = dfin.loc[str(t), :]
+            mt = matrix.copy()
+            for index, row in dfinsub.iterrows():
+                mt.loc[row['LAT'], row['LON']] = row[thedatacolumn]
+            data_da.loc[t, :] = mt.values
+        return data_da
+
+    # else:
+    #     matrix_dict = {}
+    #     for time in dtime.unique():
+    #         dfinsub = dfin.loc[time, :]
+    #         mt = matrix.copy()
+    #         for index, row in dfinsub.iterrows():
+    #             mt.loc[row['LAT'], row['LON']] = row[thedatacolumn]
+    #         matrix_dict[time] = mt
+    #     return matrix_dict
 
 
 def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
@@ -419,8 +492,8 @@ def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
 
 from matplotlib.collections import LineCollection
 
-
 def plot_conc_on_map(concentration,
+                     time_stamp = 'all',
                      resolution='c',
                      back_ground = None,
                      costlines = True,
@@ -443,6 +516,10 @@ def plot_conc_on_map(concentration,
 
     Arguments
     ---------
+    time_stamp: str, int, or pd.Timestamp
+        In case multiple sampling intervals were defined (or snapshots).
+            - "all" will plot each concentration on a separate map
+            - give index (int) or time stamp (str or pd.Timestamp) to plot particular concentration.
     resolution: str, ['c']
         Resolution of boundary database to use. Can be ``c`` (crude), ``l`` (low), ``i`` (intermediate), ``h`` (high),
         ``f`` (full) or None.
@@ -460,7 +537,221 @@ def plot_conc_on_map(concentration,
     bmap: Basemap or AxesSubplot instance
     """
     data = concentration.concentration
-    x_lon, y_lat = _np.meshgrid(data.columns, data.index)
+    if type(data).__name__ == 'DataFrame':
+        x_lon, y_lat = _np.meshgrid(data.columns, data.index)
+        time_stamp_idx = [0]
+        time_stamps_allindata = [None]
+    elif type(data).__name__ in ['DataArray','Dataset']:
+        x_lon, y_lat = _np.meshgrid(data.coords['longitude'].data, data.coords['latitude'].data)
+        if time_stamp == 'all':
+            time_stamp_idx = _np.arange(len(data))
+        elif type(time_stamp) == int:
+            time_stamp_idx = [time_stamp]
+        time_stamps_allindata = data.coords['time'].values
+
+    if type(bmap).__name__ == 'Basemap':
+        a = _plt.gca()
+        f = a.get_figure()
+
+    else:
+        # if type(data).__name__ == 'DataArray':
+        if type(bmap).__name__ == 'AxesSubplot':
+            a = bmap
+            f = a.get_figure()
+        else:
+            f, a = _plt.subplots(len(time_stamp_idx))
+            # f.set_figheight(f.get_figheight() * (len(time_stamp_idx)))
+
+    # if len(time_stamp_idx) == 1:
+    if type(a).__name__ == 'AxesSubplot':
+        a = [a]
+
+    if len(a) != len(time_stamp_idx):
+        raise ValueError('Number of axis ({}) not equal to number of concentration grids ({}). You probably want to limit the number of concentration gids by setting the time_stamp keyword.'.format(len(a), len(time_stamp_idx)))
+
+    return_list = []
+    a_idx = 0
+    for e, t in enumerate(time_stamps_allindata):
+        if e not in time_stamp_idx:
+            continue
+        if _np.any(_np.array([lat_c, lon_c, w, h]) == 'auto'):
+            # if 1:
+
+            lon_center = (x_lon.max() + x_lon.min()) / 2.
+            lat_center = (y_lat.max() + y_lat.min()) / 2.
+
+            if not hasattr(zoom_out, '__iter__'):
+                zoom_out = [zoom_out, zoom_out]
+            height = vincenty((y_lat.max(), lon_center), (y_lat.min(), lon_center)).m * zoom_out[0]
+            width = vincenty((lat_center, x_lon.max()), (lat_center, x_lon.min())).m * zoom_out[1]
+
+        if lat_c != 'auto':
+            lat_center = lat_c
+        if lon_c != 'auto':
+            lon_center = lon_c
+        if w != 'auto':
+            width = w
+        if h != 'auto':
+            height = h
+
+        if verbose:
+            print(('lat_center: %s\n'
+                   'lon_center: %s\n'
+                   'width: %s\n'
+                   'height: %s' % (lat_center, lon_center, width, height)))
+
+        bmap = _Basemap(projection='aeqd',
+                       lat_0=lat_center,
+                       lon_0=lon_center,
+                       width=width,
+                       height=height,
+                       resolution=resolution,
+                       ax=a[a_idx])
+
+        if not back_ground:
+            # Fill the globe with a blue color
+            wcal = _np.array([161., 190., 255.]) / 255.
+            boundary = bmap.drawmapboundary(fill_color=wcal)
+
+            grau = 0.9
+            continents = bmap.fillcontinents(color=[grau, grau, grau], lake_color=wcal)
+        elif back_ground == 'shadedrelief':
+            bmap.shadedrelief()
+        elif back_ground == 'bluemarble':
+            bmap.bluemarble()
+            # bmap.lsmask[bmap.lsmask == 1] = 0
+
+        elif back_ground == 'etopo':
+            bmap.etopo()
+
+        if costlines:
+            bmap.drawcoastlines(zorder = 100)
+        if states:
+            bmap.drawstates(zorder = 100)
+        if countries:
+            bmap.drawcountries(zorder = 100)
+
+        if type(data).__name__ == 'DataArray':
+            datat = data.loc[t, :]
+            z = _np.ma.masked_invalid(datat.values)
+            xm_lon, ym_lat = bmap(x_lon, y_lat)
+            if not 'alpha' in plt_kwargs.keys():
+                plt_kwargs['alpha'] = 0.6
+            pc = a[a_idx].pcolormesh(xm_lon, ym_lat, z, zorder=50, norm=_LogNorm(),
+                                 # alpha=0.6,
+                                 cmap=_plt.cm.Accent, linewidth=0, rasterized=True, **plt_kwargs)
+            if colorbar:
+                divider = _make_axes_locatable(a[a_idx])
+                cax = divider.append_axes("right", size="5%", pad=0.1)
+                colorbar = f.colorbar(pc, cax=cax)
+                colorbar.set_label('Concentration (arb. u.)')
+
+            tt = _pd.Timestamp(t)
+            title = '{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}'.format(tt.year, tt.month, tt.day, tt.hour, tt.minute, tt.second)
+            a[a_idx].set_title(title, loc = 'left')
+
+        elif type(data).__name__ == 'DataFrame':
+            z = _np.ma.masked_invalid(data.values)
+            xm_lon, ym_lat = bmap(x_lon, y_lat)
+            if not 'alpha' in plt_kwargs.keys():
+                plt_kwargs['alpha'] = 0.6
+            pc = a[a_idx].pcolormesh(xm_lon, ym_lat, z, zorder=50, norm=_LogNorm(),
+                              # alpha=0.6,
+                              cmap=_plt.cm.Accent, linewidth=0, rasterized=True, **plt_kwargs)
+            if colorbar:
+                divider = _make_axes_locatable(a[e])
+                cax = divider.append_axes("right", size="5%", pad=0.1)
+                colorbar = f.colorbar(pc, cax=cax)
+                colorbar.set_label('Concentration (arb. u.)')
+
+        return_list.append([f,a[a_idx],bmap, pc, colorbar])
+        a_idx += 1
+    # return t
+    if len(return_list) == 1:
+        return return_list[0]
+    else:
+        return return_list
+
+
+
+
+
+    # #draw paralles
+    #         parallels = np.arange(l,90,10.)
+    #         m.drawparallels(parallels,labels=[1,0,0,0],fontsize=10)
+    #         # draw meridians
+    #         meridians = np.arange(180.,360.,10.)
+    #         m.drawmeridians(meridians,labels=[0,0,0,1],fontsize=10)
+
+    # z = _np.ma.masked_invalid(data.values)
+    # xm_lon, ym_lat = bmap(x_lon, y_lat)
+    # if not 'alpha' in plt_kwargs.keys():
+    #     plt_kwargs['alpha'] = 0.6
+    # pc = a.pcolormesh(xm_lon, ym_lat, z, zorder=50, norm=_LogNorm(),
+    #                   # alpha=0.6,
+    #                   cmap=_plt.cm.Accent, linewidth=0, rasterized=True, **plt_kwargs)
+    # if colorbar:
+    #     divider = _make_axes_locatable(a)
+    #     cax = divider.append_axes("right", size="5%", pad=0.1)
+    #     colorbar = f.colorbar(pc, cax = cax)
+    #     colorbar.set_label('Concentration (arb. u.)')
+    #
+    # return bmap, pc, colorbar
+
+def plot_conc_on_map_old(concentration,
+                     time_stamp = 'all',
+                     resolution='c',
+                     back_ground = None,
+                     costlines = True,
+                     countries = True,
+                     states = False,
+                     lat_c='auto',
+                     lon_c='auto',
+                     w='auto',
+                     h='auto',
+                     zoom_out=2,
+                     colorbar = True,
+                     bmap=None,
+                     verbose=False,
+                     plt_kwargs = {}):
+    """Plots a map of the flight path
+
+    Note
+    ----
+    packages: matplotlib-basemap,
+
+    Arguments
+    ---------
+    time_stamp: str, int, or pd.Timestamp
+        In case multiple sampling intervals were defined (or snapshots).
+            - "all" will plot each concentration on a separate map
+            - give index (int) or time stamp (str or pd.Timestamp) to plot particular concentration.
+    resolution: str, ['c']
+        Resolution of boundary database to use. Can be ``c`` (crude), ``l`` (low), ``i`` (intermediate), ``h`` (high),
+        ``f`` (full) or None.
+    back_ground: str [shadedrelief, bluemarble, etopo]
+        Different maps that are plotted in the background
+    costlines: bool
+        If costlines should be drawn on map.
+    countries: bool
+        If borders between coutries should be drawn on map.
+    states: bool
+        If states boundaries should be drawn on map.
+    zoom_out: float or array-like of len==2
+    colorbar: bool
+        If colorbar is desired.
+    bmap: Basemap or AxesSubplot instance
+    """
+    data = concentration.concentration
+    if type(data).__name__ == 'DataFrame':
+        x_lon, y_lat = _np.meshgrid(data.columns, data.index)
+        time_stamp_idx = [0]
+    elif type(data).__name__ == 'DataArray':
+        x_lon, y_lat = _np.meshgrid(data.coords['longitude'].data, data.coords['latitude'].data)
+        if time_stamp == 'all':
+            time_stamp_idx = _np.arange(len(data))
+        elif type(time_stamp) == int:
+            time_stamp_idx = [time_stamp]
 
     if type(bmap).__name__ == 'Basemap':
         a = _plt.gca()
@@ -471,7 +762,7 @@ def plot_conc_on_map(concentration,
             a = bmap
             f = a.get_figure()
         else:
-            f, a = _plt.subplots()
+            f, a = _plt.subplots(len(time_stamp_idx))
 
         if _np.any(_np.array([lat_c, lon_c, w, h]) == 'auto'):
             # if 1:
@@ -524,11 +815,11 @@ def plot_conc_on_map(concentration,
             bmap.etopo()
 
         if costlines:
-            bmap.drawcoastlines()
+            bmap.drawcoastlines(zorder = 100)
         if states:
-            bmap.drawstates()
+            bmap.drawstates(zorder = 100)
         if countries:
-            bmap.drawcountries()
+            bmap.drawcountries(zorder = 100)
 
 
     # #draw paralles
@@ -538,11 +829,13 @@ def plot_conc_on_map(concentration,
     #         meridians = np.arange(180.,360.,10.)
     #         m.drawmeridians(meridians,labels=[0,0,0,1],fontsize=10)
 
-
-
     z = _np.ma.masked_invalid(data.values)
     xm_lon, ym_lat = bmap(x_lon, y_lat)
-    pc = a.pcolormesh(xm_lon, ym_lat, z, zorder=100, norm=_LogNorm(), alpha=0.6, cmap=_plt.cm.Accent, linewidth=0, rasterized=True, **plt_kwargs)
+    if not 'alpha' in plt_kwargs.keys():
+        plt_kwargs['alpha'] = 0.6
+    pc = a.pcolormesh(xm_lon, ym_lat, z, zorder=50, norm=_LogNorm(),
+                      # alpha=0.6,
+                      cmap=_plt.cm.Accent, linewidth=0, rasterized=True, **plt_kwargs)
     if colorbar:
         divider = _make_axes_locatable(a)
         cax = divider.append_axes("right", size="5%", pad=0.1)

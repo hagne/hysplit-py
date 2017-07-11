@@ -39,14 +39,18 @@ import copy
 def save_result_netCDF(result, fname, data_version = 0.2
                        # leave_open=False
                        ):
-    ds = result.concentration.to_dataset('concentration')
+    if type(result.concentration).__name__ == 'DataFrame':
+        datt = _xr.DataArray(result.concentration)
+        ds = datt.to_dataset(name='concentration')
+    else:
+        ds = result.concentration.to_dataset(name = 'concentration')
     ds.attrs['data_version'] = data_version
     ds.attrs['run_settings'] = result.run_settings
     ds.attrs['qc_reports'] = result.qc_reports
 
     # todo: get rid of following once entire project is saved instead of result only
     ds.attrs['start_loc'] = str(result._parent.parameters.starting_loc)  # When saving the entire project (run) this should not be needed anymore
-    ds.attrs['start_time'] = str(result._parent.parameters.starting_loc)  # When saving the entire project (run) this should not be needed anymore
+    ds.attrs['start_time'] = str(result._parent.parameters.start_time)  # When saving the entire project (run) this should not be needed anymore
 
     ds.to_netcdf(fname)
 
@@ -102,7 +106,7 @@ def save_result_netCDF(result, fname, data_version = 0.2
     #     ni.close()
 
 
-def open_result_netCDF(fname, leave_open=False):
+def open_result_netCDF(fname, leave_open=False, raise_error = True):
     """Loads either a single file or e ensemple of files.
 
     Arguments:
@@ -112,10 +116,18 @@ def open_result_netCDF(fname, leave_open=False):
         be loaded"""
     def load_single_file(fname):
         if not os.path.isfile(fname):
-            return False
+            if raise_error:
+                txt = '{} (fname argument) is not a path to a file!'.format(fname)
+                raise ValueError(txt)
+            else:
+                return False
         ftest = _magic.from_file(fname, mime = True)
         if ftest != 'application/x-hdf':
-            return False
+            if raise_error:
+                txt = '{} does not seem to be a netcdf file ... is {}'.format(fname, ftest)
+                raise TypeError(txt)
+            else:
+                return False
 
         data_nc = _xr.open_dataset(fname)
 
@@ -130,7 +142,13 @@ def open_result_netCDF(fname, leave_open=False):
             parent.parameters.start_time = data_nc.attrs['start_time']
 
         if 'time' not in data_nc.variables.keys():
-            data = _pd.DataFrame(data_nc.concentration.values, index=data_nc.latitudes.values, columns=data_nc.longitudes.values)
+            # changed labels somewhere ... this will keep it more flexible
+            for (lat, lon) in (('lat', 'lon'), ('latitudes', 'longitudes')):
+                try:
+                    data = _pd.DataFrame(data_nc.concentration.values, index=data_nc[lat].values, columns=data_nc[lon].values)
+                    break
+                except AttributeError:
+                    continue
             data.index.name = 'latitude'
             data.columns.name = 'longitude'
         else:

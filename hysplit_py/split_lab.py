@@ -337,28 +337,29 @@ def read_hysplit_conc_output_file(fname='/Users/htelg/Hysplit4/working/cdump'):
     matrix.index.name = 'lat'
     matrix.columns.name = 'lon'
 
-    if len(dtime.unique()) == 1:
-        for index, row in dfin.iterrows():
-            matrix.loc[row['LAT'], row['LON']] = row[thedatacolumn]
+    # if len(dtime.unique()) == 1:
+    #     for index, row in dfin.iterrows():
+    #         matrix.loc[row['LAT'], row['LON']] = row[thedatacolumn]
+    #
+    #     return matrix
+    #
+    # else:
+    # if 1:
+    time = _pd.to_datetime(dtime.unique()) #pd.to_datetime(list(matrix_dict.keys()))  #
+    dimtime = time.shape[0]
+    dimlon = lon.shape[0]
+    dimlat = lat.shape[0]
+    data = _np.zeros((dimtime, dimlat, dimlon))
 
-        return matrix
+    data_da = _xr.DataArray(data, coords=[time, lat, lon], dims=['time', 'latitude', 'longitude'])
 
-    else:
-        time = _pd.to_datetime(dtime.unique()) #pd.to_datetime(list(matrix_dict.keys()))  #
-        dimtime = time.shape[0]
-        dimlon = lon.shape[0]
-        dimlat = lat.shape[0]
-        data = _np.zeros((dimtime, dimlat, dimlon))
-
-        data_da = _xr.DataArray(data, coords=[time, lat, lon], dims=['time', 'latitude', 'longitude'])
-
-        for e,t in enumerate(time):
-            dfinsub = dfin.loc[str(t), :]
-            mt = matrix.copy()
-            for index, row in dfinsub.iterrows():
-                mt.loc[row['LAT'], row['LON']] = row[thedatacolumn]
-            data_da.loc[t, :] = mt.values
-        return data_da
+    for e,t in enumerate(time):
+        dfinsub = dfin.loc[str(t), :]
+        mt = matrix.copy()
+        for index, row in dfinsub.iterrows():
+            mt.loc[row['LAT'], row['LON']] = row[thedatacolumn]
+        data_da.loc[t, :] = mt.values
+    return data_da
 
     # else:
     #     matrix_dict = {}

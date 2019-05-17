@@ -9,6 +9,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable as _make_axes_locatable
 import matplotlib.animation as _animation
 from matplotlib import gridspec as _gridspec
 import xarray as _xr
+import pathlib
 
 try:
     import matplotlib.pylab as _plt
@@ -113,7 +114,9 @@ def open_result_netCDF(fname, leave_open=False, raise_error = True):
     ----------
     fname: string or list
         This can either be single file name, a list of files, or a folder name. In case of a folder name all file will
-        be loaded"""
+        be loaded
+    rase_erro: bool
+        If True an error will be risen in case a file does not exists or is not readable. I False suche case will skip the file"""
     def load_single_file(fname):
         if not os.path.isfile(fname):
             if raise_error:
@@ -132,11 +135,11 @@ def open_result_netCDF(fname, leave_open=False, raise_error = True):
         data_nc = _xr.open_dataset(fname)
 
         settings = data_nc.attrs['run_settings']
-        start_loc = data_nc.attrs['start_loc']
+        start_loc = eval(data_nc.attrs['start_loc'])
         qc_reports = data_nc.attrs['qc_reports']
 
         # todo: get rid of following once entire project is saved instead of result only
-        parent = type("parent", (object,), {"parameters": type('parameters', (object,), {'starting_loc': [start_loc]})})
+        parent = type("parent", (object,), {"parameters": type('parameters', (object,), {'starting_loc': start_loc})})
 
         if 'start_time' in data_nc.attrs.keys():
             parent.parameters.start_time = data_nc.attrs['start_time']
@@ -904,8 +907,10 @@ def source_attribution_angular(concentration_instance, noang = 8, raise_error = 
         return compass_bearing
 
     data_conc = concentration_instance.concentration.copy()
+    data_conc = data_conc[0].to_pandas()
     pointA = tuple(concentration_instance._parent.parameters.starting_loc[0][0:2])
     x_lon, y_lat = _np.meshgrid(data_conc.columns, data_conc.index)
+    # x_lon, y_lat = _np.meshgrid(data_conc.longitude, data_conc.latitude)
     cbv = calculate_initial_compass_bearing_vec(pointA, (y_lat, x_lon))
     cbv[_np.logical_and(y_lat == pointA[0], x_lon == pointA[1])] = _np.nan # the origin will always be 0 and therefore gives a bias to 0 ... so I get rid of it
 
@@ -952,7 +957,6 @@ def source_attribution_angular(concentration_instance, noang = 8, raise_error = 
 
     return Source_Attribution_Angular(df)
 
-
 def source_attribution_land_use(res, land_use):
     """
     Parameters
@@ -961,6 +965,7 @@ def source_attribution_land_use(res, land_use):
     """
     ### generate land use map with the same dimentions like the concentration grid
     res_tmp = res.concentration.copy()
+    res_tmp = res_tmp[0].to_pandas() #this is needed since concentration is xarray dataarray object
     res_tmp[:] = _np.nan
     res_land_use = _pd.concat([land_use.land_use_data, res_tmp])
     res_land_use.sort_index(inplace=True, ascending=False)
@@ -972,6 +977,7 @@ def source_attribution_land_use(res, land_use):
     ###
 
     res_norm = res.concentration.copy()
+    res_norm = res_norm[0].to_pandas() #this is needed since concentration is xarray dataarray object
     res_norm[_np.isnan(res_norm)] = 0
     res_norm /= res_norm.values.sum()
 
@@ -999,7 +1005,9 @@ class Source_Attribution_Angular(object):
             f, a = _plt.subplots(subplot_kw=dict(projection='polar'))
         a.set_theta_zero_location("N")
         a.set_theta_direction(-1)
-        bars = a.bar(_np.deg2rad(df.index), df.values, width= 2* _np.pi / df.shape[0],  align='center')
+        # bars = a.bar(_np.deg2rad(df.index), df.values, width= 2* _np.pi / df.shape[0],  align='center')
+        bars = a.bar(_np.deg2rad(df.index), df.values[:, 0], width=2 * _np.pi / df.values[:, 0].shape[0],
+                     align='center', lw=1)
         imax = df.values.max()
         for i, bar in zip(df.values[:, 0], bars):
             bar.set_facecolor(_plt.cm.jet(i / imax))
@@ -1590,14 +1598,18 @@ class HySplitConcentrationEnsemple(dict):
         writer.finish()
         return f,a
 
-    def create_movie_overview(self, fname, fps=12, dpi=50, test=False, conc_kwargs = {}, source_attr_angular_kwargs = {}, source_attr_land_kwargs = {}):
+    def create_movie_overview(self, fname, fps=12, dpi=50, test=False, save_figures2folder = None,
+                              create_from_saved_figs = False,
+                              conc_kwargs = {},
+                              source_attr_angular_kwargs = {}, source_attr_land_kwargs = {},):
         FFMpegWriter = _animation.writers['ffmpeg']
         metadata = dict(title='Hysplit overview movie', artist='Matplotlib',
                         #                 comment=''
                         )
         writer = FFMpegWriter(fps=fps, metadata=metadata,
                               # bitrate=500,
-                              codec = "h264")
+                              codec = "h264"
+                              )
 
         keys = list(self.keys())
         keys.sort()
@@ -1618,7 +1630,14 @@ class HySplitConcentrationEnsemple(dict):
         f.set_figheight(fh * scale)
         f.set_figwidth(fw * scale)
 
+        f.patch.set_alpha(0)
+
         writer.setup(f, fname, dpi)
+
+        if save_figures2folder:
+            save_figures2folder = pathlib.Path(save_figures2folder)
+            if not save_figures2folder.exists():
+                save_figures2folder.mkdir()
 
         for key in keys:
             res = self[key]
@@ -1633,6 +1652,10 @@ class HySplitConcentrationEnsemple(dict):
             ax_conc.set_title(txt, loc='left')
             # plt_text = a.text(1.05, 1.01, txt, ha='right', transform=a.transAxes)
             writer.grab_frame()
+            if save_figures2folder:
+                figname = key.split('/')[-1] + '.png'
+                path = save_figures2folder.joinpath(figname)
+                f.savefig(path, dpi = dpi, bbox_inches = 'tight')
             if test:
                 break
             else:
@@ -1640,6 +1663,22 @@ class HySplitConcentrationEnsemple(dict):
                 ax_sa_ang.clear()
                 ax_sa_lu.clear()
                 conc_kwargs['colorbar'] = False
+
+        if save_figures2folder:
+            if create_from_saved_figs:
+                pathout = pathlib.Path(fname)#   save_figures2folder.joinpath('overview.mp4')
+                sp = pathout.name.split('.')
+                sp[-2] += '_from_figs'
+                pathout = pathout.parent.joinpath('.'.join(sp))
+
+                if pathout.exists():
+                    pathout.unlink()
+                command = "ffmpeg -framerate {fps} -pattern_type glob -i '{folder}/*.png'  '{pathout}'".format(fps=fps,
+                                                                                                               folder=save_figures2folder,
+                                                                                                               pathout=pathout)
+                out = os.system(command)
+                if out != 0:
+                    print('something went wrong with creating movie from saved files (error code {}).\n command:\n{}'.format(out, command))
 
         writer.finish()
         return f,(ax_conc, ax_sa_ang, ax_sa_lu)

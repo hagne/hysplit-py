@@ -10,6 +10,8 @@ import matplotlib.animation as _animation
 from matplotlib import gridspec as _gridspec
 import xarray as _xr
 import pathlib
+import io
+import plt_tools as _plt_tools
 
 try:
     import matplotlib.pylab as _plt
@@ -37,74 +39,40 @@ import ftplib
 from netCDF4 import Dataset as _Dataset
 import copy
 
-def save_result_netCDF(result, fname, data_version = 0.2
+def save_result_netCDF(result, fname, data_version = 0.2, verbose = False
                        # leave_open=False
                        ):
-    if type(result.concentration).__name__ == 'DataFrame':
-        datt = _xr.DataArray(result.concentration)
-        ds = datt.to_dataset(name='concentration')
+    ds = _xr.Dataset()
+    if hasattr(result, 'trajectory'):
+        ds['trajectory'] = result.trajectory
+        run_type = 'trajectory'
+        if verbose:
+            print('type: trajectory')
+    elif hasattr(result, 'concentration'):
+        run_type = 'concentration'
+        if verbose:
+            print('type: trajectory')
+        if type(result.concentration).__name__ == 'DataFrame':
+            datt = _xr.DataArray(result.concentration)
+            ds = datt.to_dataset(name='concentration')
+        else:
+            ds = result.concentration.to_dataset(name = 'concentration')
+        ds.attrs['data_version'] = data_version
+        ds.attrs['qc_reports'] = result.qc_reports
     else:
-        ds = result.concentration.to_dataset(name = 'concentration')
-    ds.attrs['data_version'] = data_version
-    ds.attrs['run_settings'] = result.run_settings
-    ds.attrs['qc_reports'] = result.qc_reports
+        raise ValueError('not possible')
 
+
+    ds.attrs['run_settings'] = result.run_settings
+    ds.attrs['hysplit_mode'] = run_type
     # todo: get rid of following once entire project is saved instead of result only
     ds.attrs['start_loc'] = str(result._parent.parameters.starting_loc)  # When saving the entire project (run) this should not be needed anymore
     ds.attrs['start_time'] = str(result._parent.parameters.start_time)  # When saving the entire project (run) this should not be needed anymore
 
     ds.to_netcdf(fname)
-
-    # result.concentration.attrs['run_settings'] = result.run_settings
-    # result.concentration.attrs['qc_reports'] = result.qc_reports
-    #
-    # result.concentration.to_netcdf(fname)
-
-
-    # file_mode = 'w'
-    #
-    # try:
-    #     ni = _Dataset(fname, file_mode)
-    # except RuntimeError:
-    #     if os.path.isfile(fname):
-    #         os.remove(fname)
-    #         ni = _Dataset(fname, file_mode)
-    #
-    # # result = run.result
-    #
-    # # concentration
-    # data_v = result.concentration.values
-    #
-    # # concentration.dimensions
-    # lat_dim, lon_dim = data_v.shape
-    # lat_dim = ni.createDimension('latitude', lat_dim)
-    # lon_dim = ni.createDimension('longitude', lon_dim)
-    #
-    # # concentration.vaiables
-    # concentration_var = ni.createVariable('concentration', data_v.dtype, ('latitude', 'longitude'))
-    # concentration_var[:] = data_v
-    # concentration_var.units = 'particle concentration no/m^3'
-    #
-    # lat_var = ni.createVariable('latitudes', result.concentration.index.dtype, 'latitude')
-    # lat_var[:] = result.concentration.index.values
-    # lat_var.units = 'degrees in decimals'
-    #
-    # lon_var = ni.createVariable('longitudes', result.concentration.columns.dtype, 'longitude')
-    # lon_var[:] = result.concentration.columns.values
-    # lon_var.units = 'degrees in decimals'
-
-    # attributes
-    # ni.run_settings = result.run_settings
-    # ni.qc_reports = result.qc_reports
-    #
-    # # todo: get rid of following once entire project is saved instead of result only
-    # ni.start_loc = result._parent.parameters.starting_loc  # When saving the entire project (run) this should not be needed anymore
-
-    # if leave_open:
-    #     #         pass
-    #     return ni
-    # else:
-    #     ni.close()
+    if verbose:
+        print('saved to {}'.format(fname))
+    return ds
 
 
 def open_result_netCDF(fname, leave_open=False, raise_error = True):
@@ -131,11 +99,28 @@ def open_result_netCDF(fname, leave_open=False, raise_error = True):
                 raise TypeError(txt)
             else:
                 return False
-
+            
         data_nc = _xr.open_dataset(fname)
-
+        if data_nc.attrs['hysplit_mode'] == 'trajectory':
+            out = parse_trajectory_ds(data_nc)
+        elif data_nc.attrs['hysplit_mode'] == 'concentration':
+            out = parse_concentration_ds(data_nc)
+        else:
+            raise ValueError('aaaahh')
+        return out
+    
+    def parse_trajectory_ds(data_nc):
+        start_loc = eval(data_nc.attrs['start_loc'])
+        start_time = data_nc.attrs['start_time']
+        parent = type("parent", (object,), {"parameters": type('parameters', (object,), {'starting_loc': start_loc,
+                                                                                         'start_time': start_time})})
+        out = HySplitTrajectory(parent, data_nc, from_xarray_ds = True)
+        return out
+                                      
+    def parse_concentration_ds(data_nc):
         settings = data_nc.attrs['run_settings']
         start_loc = eval(data_nc.attrs['start_loc'])
+
         qc_reports = data_nc.attrs['qc_reports']
 
         # todo: get rid of following once entire project is saved instead of result only
@@ -193,6 +178,8 @@ def open_result_netCDF(fname, leave_open=False, raise_error = True):
         elif _os.path.isdir(fname):
             file_list = _os.listdir(fname)
             file_list = [fname + fn for fn in file_list]
+        else:
+            raise FileNotFoundError('file or directory not found: {}'.format(fname))
 
     res_dic = {}
     for file in file_list:
@@ -201,6 +188,90 @@ def open_result_netCDF(fname, leave_open=False, raise_error = True):
             res_dic[file] = res
 
     return HySplitConcentrationEnsemple(res_dic)
+
+
+def multirun(runs, startdt, save_base_folder, which='new', readme=None, test=False):
+    """
+    Does the same run for a list of date times
+    Parameters
+    ----------
+    runs: a single or list of Run instances
+    startdt: list of pd.Datetime instances
+    save_base_folder: where to save ... str
+    which: 'new' or 'all'
+        all allows overwriting exisitng files
+    readme
+    test: Reduces the sample numbers and causes saving in tmp
+
+
+    Returns
+    -------
+
+    """
+    if test == True:
+        #         run_time = -3
+        testres = []
+        which = 'all'
+        #         save_base_folder = '/mnt/telg/tmp/'
+        number_of_samples = 100
+
+    if not isinstance(runs, list):
+        runs = [runs]
+    if not isinstance(readme, type(None)):
+        rmf = open(save_base_folder + 'readme', 'w')
+        rmf.write(readme)
+        rmf.close
+
+    # ensure folder exists
+    pathlib.Path(save_base_folder).mkdir(parents=True, exist_ok=True)
+
+    for e, dt in enumerate(startdt):
+        start_time = str(dt)
+        print(start_time + '.....', end='')
+
+        ### run
+        for run in runs:
+            fname = save_base_folder + '{}{:02d}{:02d}_{:02d}{:02d}{:02d}_{}.nc'.format(dt.year, dt.month, dt.day,
+                                                                                        dt.hour, dt.minute, dt.second,
+                                                                                        run.hysplit_mode[:4])
+            # continue if file exists
+            if which == 'new':
+                if os.path.isfile(fname):
+                    print('filename exists -> skip')
+                    continue
+            elif which == 'all':
+                pass
+            else:
+                raise ValueError('noop')
+
+            run.parameters.start_time = start_time
+            #             return run
+            if test:
+                # run.parameters.run_time = run_time
+                run.parameters.number_of_samples = number_of_samples
+            if 1:
+                try:
+                    run.download_missing_meterologic_files(max_files=12)
+                except:
+                    print('download of missing files failed -> skip!')
+                    continue
+            try:
+                print(run.parameters.start_time)
+                run.run()
+            except:
+                print('run failed - skip!')
+                #         break
+                continue
+
+            ## results.save
+            run.result.save_netCDF(fname)
+            if test:
+                testres.append(run.result)
+        print('done')
+        if test:
+            return testres
+
+    #     break
 
 
 def datetime_str2hysplittime(time_string = '2010-01-01 00:00:00'):
@@ -375,7 +446,7 @@ def read_hysplit_conc_output_file(fname='/Users/htelg/Hysplit4/working/cdump'):
     #     return matrix_dict
 
 
-def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
+def read_hysplit_traj_output_file(run =  None, fname='/Users/htelg/Hysplit4/working/tdump'):
     # fname_traj = '/Users/htelg/Hysplit4/working/tdump'
     traj_rein = open(fname)
 
@@ -385,34 +456,41 @@ def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
     no_met_grids = traj_rein.readline()
     no_met_grids = int(no_met_grids.split()[0])
 
-    if no_met_grids > 1:
-        txt = 'Programming requrired! Till now only one meterologic grid is allowed. The output indicates %s were used.' % no_met_grids
-        raise ValueError(txt)
+
+    # if no_met_grids > 1:
+    #     txt = 'Programming requrired! Till now only one meterologic grid is allowed. The output indicates %s were used.' % no_met_grids
+    #     raise ValueError(txt)
 
     # Record #2
 
-    rec2 = traj_rein.readline()
-    rec2 = rec2.split()
+    # read the met grid infos ... I don't have much use for this right now.
+    for i in range(no_met_grids):
+        rec2 = traj_rein.readline()
     met_model_id = rec2[0]
-
-    year = int(rec2[1])
-    if year > 50:
-        year = 1900 + year
-    else:
-        year = 2000 + year
-    month = int(rec2[2])
-    day = int(rec2[3])
-    hour = int(rec2[4])
-    forecast_hour = rec2[5]
-
-    date_time_start = '{}-{:02}-{:02} {:02}:00:00'.format(year, month, day, hour)
-    date_time_start = _pd.Timestamp(date_time_start)
-
-    met_model_id, date_time_start
-
     output_dict['met_model_id'] = met_model_id
-    output_dict['date_time_start'] = date_time_start
-
+###############
+#### gettting the start time here which is not the right place to do this
+    # rec2 = traj_rein.readline()
+    # rec2 = rec2.split()
+    # met_model_id = rec2[0]
+    #
+    # year = int(rec2[1])
+    # if year > 50:
+    #     year = 1900 + year
+    # else:
+    #     year = 2000 + year
+    # month = int(rec2[2])
+    # day = int(rec2[3])
+    # hour = int(rec2[4])
+    # forecast_hour = rec2[5]
+    #
+    # date_time_start = '{}-{:02}-{:02} {:02}:00:00'.format(year, month, day, hour)
+    # date_time_start = _pd.Timestamp(date_time_start)
+    #
+    #
+    # output_dict['met_model_id'] = met_model_id
+    # output_dict['date_time_start'] = date_time_start
+#########################
     # Record 3
 
     rec3 = traj_rein.readline()
@@ -451,13 +529,14 @@ def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
         lons_start[e] = float(l[5])
         alts_start[e] = float(l[6])
     # break
-
+    date_time_start = '{}-{:02}-{:02} {:02}:00:00'.format(year, month, day, hour)
+    date_time_start = _pd.Timestamp(date_time_start)
+    output_dict['date_time_start'] = date_time_start
     start_conditions = _pd.DataFrame()
     start_conditions['date_time'] = _pd.Series(start_date_times)
     start_conditions['latitude'] = _pd.Series(lans_start)
     start_conditions['longitude'] = _pd.Series(lons_start)
     start_conditions['altitude_above_ground(m)'] = _pd.Series(alts_start)
-    start_conditions
 
     output_dict['start_conditions'] = start_conditions
 
@@ -484,7 +563,6 @@ def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
     # 1X,F8.1 - position height in meters above ground
     # n(1X,F8.1) - n diagnostic output variables (1st to be output is always pressure)
 
-    import io
     rec6 = traj_rein.read()
 
     rec6_clean = '\n'.join([','.join(e) for e in [i.split() for i in rec6.split('\n')]])
@@ -509,7 +587,9 @@ def read_hysplit_traj_output_file(fname='/Users/htelg/Hysplit4/working/tdump'):
     for i in range(num_of_trajs):
         odt = output_dict.copy()
         odt['trajectory'] = (trajectory[trajectory.trajectory_num == i + 1])
-        output_list.append(HySplitTrajectory(odt))
+        output_list.append(HySplitTrajectory(run, odt))
+
+
     return output_list
 
 from matplotlib.collections import LineCollection
@@ -572,7 +652,7 @@ def plot_conc_on_map(concentration,
         time_stamps_allindata = data.coords['time'].values
 
     if type(bmap).__name__ == 'Basemap':
-        a = _plt.gca()
+        a = bmap.ax
         f = a.get_figure()
 
     else:
@@ -593,65 +673,69 @@ def plot_conc_on_map(concentration,
 
     return_list = []
     a_idx = 0
+
+    # todo: the following code is stuck in the middle between having a single conentration results versus many
     for e, t in enumerate(time_stamps_allindata):
         if e not in time_stamp_idx:
             continue
-        if _np.any(_np.array([lat_c, lon_c, w, h]) == 'auto'):
-            # if 1:
 
-            lon_center = (x_lon.max() + x_lon.min()) / 2.
-            lat_center = (y_lat.max() + y_lat.min()) / 2.
+        if type(bmap).__name__ != 'Basemap':
+            if _np.any(_np.array([lat_c, lon_c, w, h]) == 'auto'):
+                # if 1:
 
-            if not hasattr(zoom_out, '__iter__'):
-                zoom_out = [zoom_out, zoom_out]
-            height = vincenty((y_lat.max(), lon_center), (y_lat.min(), lon_center)).m * zoom_out[0]
-            width = vincenty((lat_center, x_lon.max()), (lat_center, x_lon.min())).m * zoom_out[1]
+                lon_center = (x_lon.max() + x_lon.min()) / 2.
+                lat_center = (y_lat.max() + y_lat.min()) / 2.
 
-        if lat_c != 'auto':
-            lat_center = lat_c
-        if lon_c != 'auto':
-            lon_center = lon_c
-        if w != 'auto':
-            width = w
-        if h != 'auto':
-            height = h
+                if not hasattr(zoom_out, '__iter__'):
+                    zoom_out = [zoom_out, zoom_out]
+                height = vincenty((y_lat.max(), lon_center), (y_lat.min(), lon_center)).m * zoom_out[0]
+                width = vincenty((lat_center, x_lon.max()), (lat_center, x_lon.min())).m * zoom_out[1]
 
-        if verbose:
-            print(('lat_center: %s\n'
-                   'lon_center: %s\n'
-                   'width: %s\n'
-                   'height: %s' % (lat_center, lon_center, width, height)))
+            if lat_c != 'auto':
+                lat_center = lat_c
+            if lon_c != 'auto':
+                lon_center = lon_c
+            if w != 'auto':
+                width = w
+            if h != 'auto':
+                height = h
 
-        bmap = _Basemap(projection='aeqd',
-                       lat_0=lat_center,
-                       lon_0=lon_center,
-                       width=width,
-                       height=height,
-                       resolution=resolution,
-                       ax=a[a_idx])
+            if verbose:
+                print(('lat_center: %s\n'
+                       'lon_center: %s\n'
+                       'width: %s\n'
+                       'height: %s' % (lat_center, lon_center, width, height)))
 
-        if not back_ground:
-            # Fill the globe with a blue color
-            wcal = _np.array([161., 190., 255.]) / 255.
-            boundary = bmap.drawmapboundary(fill_color=wcal)
+            bmap = _Basemap(projection='aeqd',
+                           lat_0=lat_center,
+                           lon_0=lon_center,
+                           width=width,
+                           height=height,
+                           resolution=resolution,
+                           ax=a[a_idx])
 
-            grau = 0.9
-            continents = bmap.fillcontinents(color=[grau, grau, grau], lake_color=wcal)
-        elif back_ground == 'shadedrelief':
-            bmap.shadedrelief()
-        elif back_ground == 'bluemarble':
-            bmap.bluemarble()
-            # bmap.lsmask[bmap.lsmask == 1] = 0
+            if not back_ground:
+                # Fill the globe with a blue color
+                wcal = _np.array([161., 190., 255.]) / 255.
+                boundary = bmap.drawmapboundary(fill_color=wcal)
 
-        elif back_ground == 'etopo':
-            bmap.etopo()
+                grau = 0.9
+                continents = bmap.fillcontinents(color=[grau, grau, grau], lake_color=wcal)
+            elif back_ground == 'shadedrelief':
+                bmap.shadedrelief()
+            elif back_ground == 'bluemarble':
+                bmap.bluemarble()
+                # bmap.lsmask[bmap.lsmask == 1] = 0
 
-        if costlines:
-            bmap.drawcoastlines(zorder = 100)
-        if states:
-            bmap.drawstates(zorder = 100)
-        if countries:
-            bmap.drawcountries(zorder = 100)
+            elif back_ground == 'etopo':
+                bmap.etopo()
+
+            if costlines:
+                bmap.drawcoastlines(zorder = 100)
+            if states:
+                bmap.drawstates(zorder = 100)
+            if countries:
+                bmap.drawcountries(zorder = 100)
 
         if type(data).__name__ == 'DataArray':
             datat = data.loc[t, :]
@@ -668,8 +752,10 @@ def plot_conc_on_map(concentration,
                 colorbar = f.colorbar(pc, cax=cax)
                 colorbar.set_label('Concentration (arb. u.)')
 
-            tt = _pd.Timestamp(t)
-            title = '{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}'.format(tt.year, tt.month, tt.day, tt.hour, tt.minute, tt.second)
+#             tt = _pd.Timestamp(t)
+#             print('time: {}'.format(t))
+#             title = '{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}'.format(tt.year, tt.month, tt.day, tt.hour, tt.minute, tt.second)
+            title = concentration._parent.parameters.start_time
             a[a_idx].set_title(title, loc = 'left')
 
         elif type(data).__name__ == 'DataFrame':
@@ -1087,7 +1173,22 @@ class Source_Attribution_Land_use(object):
     #     a.set_aspect(1)
     #     return a
 
-def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_c='auto', w='auto', h='auto', bmap=None, color_gradiant = True, verbose=False, **plt_kwargs):
+def plot_traj_on_map(self,
+                     intensity ='altitude_above_ground(m)',
+                     resolution='c',
+                     back_ground = None,
+                     lat_c='auto',
+                     lon_c='auto',
+                     w='auto',
+                     h='auto',
+                     bmap=None,
+                     color_gradiant = True,
+                     show_days = True,
+                     verbose=False,
+                     fontsize = 12,
+                     colorbar = True,
+                     zorder = None,
+                     **plt_kwargs):
     """Plots a map of the flight path
 
     Note
@@ -1096,8 +1197,12 @@ def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_
 
     Arguments
     ---------
+    intensity: 'time' or one of the columns of trajectory ('latitude', 'longitude', 'altitude_above_ground(m)', 'PRESSURE')
     color_gradiant: bool or colormap.
         The trajectory can be plotted so it changes color in time. If True the standard cm map is used but you can also pass a cm map here, e.g. color_gradiant = plt.cm.jet
+    colorbar: bool or dict
+        a dict can be used to add kwargs for plt_tools.colorbar.colorbar_axis_split_off:
+        - postion ([right], left, bottom, top)
     """
 
     def get_colorMap():
@@ -1156,7 +1261,7 @@ def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_
         return segments
 
 
-    def colorline(x, y, z=None, zmax = 1, cmap=_plt.get_cmap('copper'), norm=_plt.Normalize(0.0, 1.0), alpha=None, **kwargs):
+    def colorline(x, y, z=None, zmax = 1, cmap=_plt.get_cmap('copper'), norm=_plt.Normalize(0.0, 1.0), alpha=None, zorder = None, **kwargs):
         '''
         Plot a colored line with coordinates x and y
         Optionally specify colors in the array z
@@ -1175,7 +1280,7 @@ def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_
 
         segments = make_segments(x, y)
         lc = LineCollection(segments, array=z, cmap=cmap, norm=norm,
-                            alpha=alpha,
+                            alpha=alpha, zorder = zorder,
                             **kwargs
                             )
 
@@ -1187,7 +1292,7 @@ def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_
 
     three_d = False
     data = self.trajectory.copy()
-    data = data.loc[:, ['longitude', 'latitude']]
+    # data = data.loc[:, ['longitude', 'latitude']]
     data = data.dropna()
 
     if not bmap:
@@ -1234,14 +1339,30 @@ def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_
                             height=height,
                             resolution=resolution)
 
-            # Fill the globe with a blue color
-            wcal = _np.array([161., 190., 255.]) / 255.
-            boundary = bmap.drawmapboundary(fill_color=wcal)
 
-            grau = 0.9
-            continents = bmap.fillcontinents(color=[grau, grau, grau], lake_color=wcal)
+            if not back_ground:
+                # Fill the globe with a blue color
+                wcal = _np.array([161., 190., 255.]) / 255.
+                boundary = bmap.drawmapboundary(fill_color=wcal)
+
+                grau = 0.9
+                continents = bmap.fillcontinents(color=[grau, grau, grau], lake_color=wcal)
+            elif back_ground == 'shadedrelief':
+                bmap.shadedrelief()
+            elif back_ground == 'bluemarble':
+                bmap.bluemarble()
+
+            # grau = 0.9
+            # continents = bmap.fillcontinents(color=[grau, grau, grau], lake_color=wcal)
             costlines = bmap.drawcoastlines()
+            f = _plt.gcf()
+            a = _plt.gca()
+            bmap.ax = a
 
+        else:
+            if isinstance(bmap.ax, type(None)):
+                bmap.ax = _plt.gca()
+            a = bmap.ax
 
         x, y = bmap(data.longitude.values, data.latitude.values)
 
@@ -1251,11 +1372,14 @@ def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_
             else:
                 cm = color_gradiant
             if intensity == 'time':
-                print('time')
+                # print('time')
                 hours = (self.trajectory.index[-1] - self.trajectory.index[0]) / _np.timedelta64(1,'h')
                 path = colorline(x, y, zmax = hours,
-                                 norm = _plt.Normalize(0.0, hours) ,
+                                 norm = _plt.Normalize(0.0, hours) ,zorder = zorder,
                                  cmap = cm)
+
+                # import plt_tools
+                # plt_tools.plot.plot_gradiant_color(x)
             else:
                 try:
                     zt = self.trajectory[intensity]
@@ -1264,18 +1388,67 @@ def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_
                     opt.append('time')
                     txt = '{} not an option. Try {}'.format(intensity, opt )
                     raise KeyError(txt)
-                path = colorline(x, y, zt,
-                             norm=_plt.Normalize(zt.min(), zt.max()),
-                             cmap=cm,
-                             **plt_kwargs)
+                # path = colorline(x, y, zt,
+                #              norm=_plt.Normalize(zt.min(), zt.max()),
+                #              cmap=cm, zorder= zorder,
+                #              **plt_kwargs)
+                # _plt_tools.plot.plot_gradiant_color()
+                _,path,_ = _plt_tools.plot.plot_gradiant_color(x,
+                                                    y,
+                                                    z=zt,
+                                                    resample=1,
+                                                    ax=a,
+                                                    colorbar = False,
+                                                    lc_kwargs={'zorder': zorder, 'cmap': cm},
+                                                )
 
-            f = path.get_figure()
-            cb = f.colorbar(path)
+
+            if colorbar:
+                if not isinstance(colorbar, dict):
+                    colorbar = {}
+                cb, cb_ax = _plt_tools.colorbar.colorbar_axis_split_off(path, a , **colorbar)
+                # cb = f.colorbar(path)
+                cb.set_label(intensity)
+            else:
+                cb = None
+            # return data
+            # data = run_t.result.trajectory.copy()
+            if show_days:
+                bc = _pd.DataFrame(_np.array(bmap(data.longitude.values, data.latitude.values)).transpose(),
+                                  columns=['lon', 'lat'],
+                                  index=data.index)
+
+                data = _pd.concat([data, bc], axis=1)
+
+                se = round(data['age_of_trajectory(h)'] - 0.0001) #round does wired stuff if you are right in the middle between two numbers
+                se = (data[se.mod(24) == 0]).iloc[1:]
+
+                g, = a.plot(se.lon, se.lat, zorder = zorder)
+                g.set_linestyle('')
+                g.set_marker('o')
+                fs = fontsize
+                g.set_markersize(fs * 1.4)
+                col = g.get_color()
+                g.set_markerfacecolor([1, 1, 1, 0.4])
+                g.set_markeredgecolor(col)
+                if verbose:
+                    print('days', end = ': ')
+                    print(se)
+                for idx, row in se.iterrows():
+                    #     pass
+
+                    a.annotate('{:0.0f}'.format(row['age_of_trajectory(h)'] / 24),
+                               (row.lon, row.lat),
+                               ha='center', va='center', fontsize=fs, zorder = zorder
+                               )
 
         else:
             path = bmap.plot(x, y,
                              color='m', **plt_kwargs)
-        return bmap
+            
+
+        return bmap, a, path, cb
+
 
 
     # else:
@@ -1302,17 +1475,26 @@ def plot_traj_on_map(self, intensity ='time', resolution='c', lat_c='auto', lon_
 
 
 class HySplitTrajectory(object):
-    def __init__(self, trajectory_dict):
+    def __init__(self, parent, trajectory_dict, from_xarray_ds = False):
         #         met_model_id
-        self.start_date_time = trajectory_dict['date_time_start']
-        self.direction_of_traj = trajectory_dict['direction_of_traj']
-        #         vertical_motion_method
-        self.start_conditions = trajectory_dict['start_conditions']
-        self.output_variables = trajectory_dict['output_variables']
-        self.trajectory = trajectory_dict['trajectory'][['latitude', 'longitude', 'altitude_above_ground(m)'] + trajectory_dict['output_variables']]
-        self.trajectory_dropped = trajectory_dict['trajectory'][['trajectory_num', 'met_grid_num', 'forcast_hour', 'age_of_trajectory(h)']]
+        self._parent = parent
+        
+        if from_xarray_ds:
+            ds = trajectory_dict
+            self.trajectory = ds.trajectory.to_pandas()
+        else:
+            self.start_date_time = trajectory_dict['date_time_start']
+            self.direction_of_traj = trajectory_dict['direction_of_traj']
+            #         vertical_motion_method
+            self.start_conditions = trajectory_dict['start_conditions']
+            self.output_variables = trajectory_dict['output_variables']
+            self.trajectory = trajectory_dict['trajectory'][['latitude', 'longitude', 'altitude_above_ground(m)', 'age_of_trajectory(h)'] + trajectory_dict['output_variables']]
+            self.trajectory_dropped = trajectory_dict['trajectory'][['trajectory_num', 'met_grid_num', 'forcast_hour']]
 
-    plot_on_map = plot_traj_on_map
+    plot = plot_traj_on_map
+    save_netCDF = save_result_netCDF
+#     def save_netCDF(self, fnmae):
+#         return
 
 
 class HySplitConcentration(object):
@@ -1784,6 +1966,13 @@ class Parameters(object):
 
     @start_time.setter
     def start_time(self, data):
+        assert(isinstance(data, str))
+        if len(data) != 19:
+            txt = ('The length of the start_time ({}) is suspicious. '
+                   'The expected length is 19. The provided one is {}. '
+                   'Make sure your string does not include timezone! '
+                   'It has to be UTC anyway'.format(data, len(data)))
+            raise ValueError(txt)
         Parameter(self, 'control.start_time')._set_value(data)
 
     @property
@@ -1912,7 +2101,14 @@ settings['control.run_time'] = {'value': 48,
                                 'doc': ''}
 settings['control.vertical_motion_option'] = {'value': 0,
                                               'default': 0,
-                                              'doc': ''}
+                                              'doc': """Indicates the vertical motion calculation method. The default "data"
+            selection will use the meteorological model's vertical velocity fields;
+            other options include {isob}aric, {isen}tropic, constant {dens}ity,
+            constant internal {sigma} coordinate, computed from the velocity
+            {diverg}ence, vertical coordinate remapping from MSL to AGL, and a special
+            option (7) to spatially average the vertical velocity. The averaging
+            distance is automatically computed from the ratio of the temporal frequency
+            of the data to the horizontal grid resolution."""}
 settings['control.top_of_model_domain'] = {'value': 10000.0,
                                            'default': 10000.0,
                                            'doc': ''}
@@ -2318,6 +2514,7 @@ class Scenes(object):
 class Run(object):
     def __init__(self,
                  hysplit_mode,
+                 path2hysplit = '/mnt/telg/programs/hysplit/',
                  start_time='00 00 00 00',
                  num_starting_loc=1,
                  starting_loc=[[40., -90., 10.]],
@@ -2325,7 +2522,8 @@ class Run(object):
                  vertical_motion_option=0,
                  top_of_model_domain=10000.0,
                  input_met_file_names=['/Users/htelg/Hysplit4/working/oct1618.BIN'],
-                 output_path='./tdump', ):
+#                  output_path='./tdump', 
+                ):
 
         """
         This class sets up a Hysplit run
@@ -2427,7 +2625,7 @@ class Run(object):
             Default: ( \main\trajectory\output\ )
             Directory location to which the text trajectory end-points file will be written. Always terminate with the appropriate slash (\ or /).
         """
-        self._settings = settings.copy()
+        self._settings = deepcopy(settings)
         self.hysplit_mode = hysplit_mode
         self.parameters = Parameters(self)
 
@@ -2444,17 +2642,19 @@ class Run(object):
         #######
 
         self.settings = Settings()
+        self.settings.path2working_directory = path2hysplit + 'working/' #todo: make a path to hysplit in the settings. then do others relative to that
+
         hysplit_mode_options = ['trajectory', 'concentration']
         if self.hysplit_mode == 'trajectory':
-            self.settings.path2executable = '/Users/htelg/Hysplit4/working/hyts_std'
+            self.settings.path2executable = path2hysplit + 'exec/hyts_std'
+            self.parameters.output_path = './tdump'
         elif self.hysplit_mode == 'concentration':
-            self.settings.path2executable = '/Users/htelg/Hysplit4/working/hycs_std'
+            self.settings.path2executable = path2hysplit + 'exec/hycs_std'
             self.parameters.output_path = './cdump'
         else:
             txt = '{} is not an option for the hysplit_mode input parameter. Please choose one from {}'.format(self.hysplit_mode, str(hysplit_mode_options))
             raise ValueError(txt)
 
-        self.settings.path2working_directory = '/Users/htelg/Hysplit4/working/'
         self.settings.project_directory = os.getcwd()
 
     def copy(self):
@@ -2638,8 +2838,10 @@ class Run(object):
                 raus.write('{}\n'.format(pol.radioactive_decay))
                 raus.write('{}\n'.format(pol.pollutant_resuspension))
         elif self.hysplit_mode == 'trajectory':
-            folder, file = os.path.split(self.parameters.output_path)
-            raus.write(folder + '/' + '\n')
+            # folder, file = os.path.split(self.parameters.output_path)
+            file = self.parameters.output_path
+            folder = self.settings.path2working_directory
+            raus.write(folder + '\n')
             raus.write(file + '\n')  # 11
         else:
             raise ValueError()
@@ -2694,7 +2896,7 @@ class Run(object):
         self._create_setup_file()
         self._run_hysplit_traj(verbose=verbose)
         if self.hysplit_mode == 'trajectory':
-            result = read_hysplit_traj_output_file()
+            result = read_hysplit_traj_output_file(run = self, fname = self.settings.path2working_directory + 'tdump')
         elif self.hysplit_mode == 'concentration':
             result = read_hysplit_conc_output_file(self.settings.path2working_directory + 'cdump')
             result = HySplitConcentration(self, result)

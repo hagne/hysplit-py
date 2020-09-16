@@ -1,9 +1,14 @@
-import gdal
 from netCDF4 import Dataset
 import magic
 import numpy as np
 import pandas as pd
 import matplotlib.pylab as plt
+import warnings
+try:
+    import gdal
+except ModuleNotFoundError:
+    warnings.warn('gdal not found, this will probably result in prublems (with respect to landuse) further down the road')
+
 
 
 def read_file(fname, filetype=None):

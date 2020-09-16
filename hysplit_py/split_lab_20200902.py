@@ -13,7 +13,6 @@ import pathlib
 import io
 import plt_tools as _plt_tools
 
-
 try:
     import matplotlib.pylab as _plt
 except:
@@ -93,7 +92,7 @@ def open_result_netCDF(fname, leave_open=False, raise_error = True):
                 raise ValueError(txt)
             else:
                 return False
-        ftest = _magic.from_file(fname.as_posix(), mime = True)
+        ftest = _magic.from_file(fname, mime = True)
         if ftest != 'application/x-hdf':
             if raise_error:
                 txt = '{} does not seem to be a netcdf file ... is {}'.format(fname, ftest)
@@ -172,18 +171,13 @@ def open_result_netCDF(fname, leave_open=False, raise_error = True):
 
     if type(fname) == list:
         file_list = fname
-        
-    else:
-        if type(fname) == str:
-            fname = pathlib.Path(fname)
-                
-        
-        if fname.is_file():
+    elif type(fname) == str:
+        if _os.path.isfile(fname):
             return load_single_file(fname)
 
-        elif fname.is_dir():
-            file_list = list(fname.glob('*'))
-            # file_list = [fname + fn for fn in file_list]
+        elif _os.path.isdir(fname):
+            file_list = _os.listdir(fname)
+            file_list = [fname + fn for fn in file_list]
         else:
             raise FileNotFoundError('file or directory not found: {}'.format(fname))
 
@@ -196,15 +190,16 @@ def open_result_netCDF(fname, leave_open=False, raise_error = True):
     return HySplitConcentrationEnsemple(res_dic)
 
 
-def multirun(run_info, folders, process_number, which='new', readme=None, test=False):
+def multirun(runs, run_info, save_base_folder, which='new', readme=None, test=False):
     """
     Does the same run for a list of date times
     Parameters
     ----------
+    runs: a single or list of Run instances
     run_info: pandas dataframe. columns:
         mandatory: start_datetiem
         optional: altitude
-    folders: dict of foldernames
+    save_base_folder: where to save ... str
     which: 'new' or 'all'
         all allows overwriting exisitng files
     readme
@@ -215,136 +210,77 @@ def multirun(run_info, folders, process_number, which='new', readme=None, test=F
     -------
 
     """
-
     if test == True:
         #         run_time = -3
         testres = []
-        which = 'new'
+        which = 'all'
         #         save_base_folder = '/mnt/telg/tmp/'
         number_of_samples = 100
 
-    # if not isinstance(runs, list):
-    #     runs = [runs]
+    if not isinstance(runs, list):
+        runs = [runs]
     if not isinstance(readme, type(None)):
-        rmf = open(folders['save_base_folder'] + 'readme', 'w')
+        rmf = open(save_base_folder + 'readme', 'w')
         rmf.write(readme)
         rmf.close
 
     # ensure folder exists
-    # pathlib.Path(save_base_folder).mkdir(parents=True, exist_ok=True)
+    pathlib.Path(save_base_folder).mkdir(parents=True, exist_ok=True)
 
 
-### baoustelle anfang
-    def initiate_run(row, folders):
-        if row.hy_mode == 'traj':
-            run = Run('trajectory', path2hysplit = folders['path2hysplit'])
-        
-        elif row.hy_mode == 'conc':
-            run = Run('concentration', path2hysplit = folders['path2hysplit'])
-            run.parameters.predefined_scenes.sgp_aerosol_accu_backwards_gdas1()
-            run.parameters.concentration_grids.default.center = [row.lat, row.lon]
-            run.parameters.concentration_grids.default.span = [60.0, 360]
-            run.parameters.number_of_samples = 20000
-            
-        run.parameters.input_met_data_folder = folders['path2metfiles']
-        run.parameters.meterologic_data_format = 'gdas0p5'
-        # run.parameters.starting_loc = [[coordinates_lat_lon[0], coordinates_lat_lon[1], altitude]]
-        run.parameters.starting_loc = [[row.lat, row.lon, row.altitude]]
-        run.parameters.run_time = row.run_time
-        run.parameters.start_time = str(row.start_datetime)
-           
-        return run
-    
-    def scramble_workload(startdt, process_number):
-        startdt = startdt.copy()
-        if process_number == 2:
-            startdt = startdt[::-1]
-        # start in the middle
-        
-        elif process_number in [3, 4]:
-            idx = int(len(startdt)/2)
-            # startdt = startdt[idx:] + startdt[:idx]
-            startdt = _pd.concat([startdt[idx:], startdt[:idx]])
-            # start in the middle backwards
-            if process_number == 4:
-                startdt = startdt[::-1]
-        
-        # start after one quarter of datelist
-        elif process_number == 5:
-            idx = int(len(startdt)/4)
-            startdt = _pd.concat([startdt[idx:], startdt[:idx]])
-        # start after 3 quarters of datelist
-        elif process_number == 6:
-            idx = int(len(startdt)/4) * 3
-            startdt = _pd.concat([startdt[idx:], startdt[:idx]])
-        return startdt
-##### bausteelle ende
-    run_info = scramble_workload(run_info, process_number)    
 
     for e, (idx, row) in enumerate(run_info.iterrows()):
-        # dt = row.start_datetime
-        # start_time = str(dt)
-        print(row.file_name, end='...')
+        dt = row.start_datetime
+        start_time = str(dt)
+        print(start_time + '.....', end='')
         ### run
-
-### baustelle anfang
-        # for run in runs:
-        # fname = save_base_folder + '{}{:02d}{:02d}_{:02d}{:02d}{:02d}_{}.nc'.format(dt.year, dt.month, dt.day,
-        #                                                                             dt.hour, dt.minute, dt.second,
-        #        
-                                                                     # run.hysplit_mode[:4])
-        # continue if file exists
-        save_base_folder = pathlib.Path(folders['save_base_folder'])
-        fname = save_base_folder.joinpath(row.file_name)
-        if which == 'new':
-            if os.path.isfile(fname):
-                print('filename exists -> skip')
-                continue
-            else:
-                # print('doesnt')
+        for run in runs:
+            fname = save_base_folder + '{}{:02d}{:02d}_{:02d}{:02d}{:02d}_{}.nc'.format(dt.year, dt.month, dt.day,
+                                                                                        dt.hour, dt.minute, dt.second,
+                                                                                        run.hysplit_mode[:4])
+            # continue if file exists
+            if which == 'new':
+                if os.path.isfile(fname):
+                    print('filename exists -> skip')
+                    continue
+            elif which == 'all':
                 pass
-        elif which == 'all':
-            pass
-        else:
-            raise ValueError('noop')
-            
-        run = initiate_run(row, folders)
-        # run.parameters.start_time = start_time
-        # if 'altitude' in row.index:
-        #     run.parameters.starting_loc[0][2] =  row.altitude
-        #             return run
-        if test:
-            run.parameters.number_of_samples = number_of_samples
-        if 1:
-            try:
-                run.download_missing_meterologic_files(max_files=12)
-            except:
-                print('download of missing files failed -> skip!')
-                continue
-        try:
-            # print(run.parameters.start_time)
-            run.run()
-        except Exception as e:
-            ermas = str(e)
-            print('run failed - skip! Error msg: {}'.format(ermas))
+            else:
+                raise ValueError('noop')
+
+            run.parameters.start_time = start_time
+            if 'altitude' in row.index:
+                run.parameters.starting_loc[0][2] =  row.altitude
+            #             return run
+            if test:
+                # run.parameters.run_time = run_time
+                run.parameters.number_of_samples = number_of_samples
             if 1:
+                try:
+                    run.download_missing_meterologic_files(max_files=12)
+                except:
+                    print('download of missing files failed -> skip!')
+                    continue
+            try:
+                print(run.parameters.start_time)
+                run.run()
+            except Exception as e:
+                ermas = str(e)
+                print('run failed - skip! Error msg: {}'.format(ermas))
                 if test:
                     print('run is returned for further analysis')
                     return run
-            continue
+                continue
 
-        ## results.save
-        run.result.save_netCDF(fname)
+            ## results.save
+            run.result.save_netCDF(fname)
+            if test:
+                testres.append(run.result)
+        print('done')
         if test:
-            testres.append(run.result)
-                      
-### baustelle ende
-        print('done', end = '\t')
-        if test:
-            print('stop since testing?')
             return testres
 
-    return run
+    #     break
 
 
 def datetime_str2hysplittime(time_string = '2010-01-01 00:00:00'):
@@ -648,9 +584,9 @@ def read_hysplit_traj_output_file(run =  None, fname='/Users/htelg/Hysplit4/work
     trajectory = _pd.read_csv(buffer, names=names)
 
     # trajectory.year.loc[trajectory.year > 50] += 1900
-    trajectory.loc[trajectory.year > 50,'year'] += 1900
+    trajectory[trajectory.year > 50].loc[:,'year'] += 1900
     # trajectory.year.loc[trajectory.year <= 50] += 2000
-    trajectory.loc[trajectory.year <= 50,'year'] += 2000
+    trajectory[trajectory.year <= 50].loc[:,'year'] += 2000
 
     ts_cols = ['year', 'month', 'day', 'hour', 'minute']
     time_df = trajectory[ts_cols]
@@ -684,7 +620,6 @@ def plot_conc_on_map(concentration,
                      colorbar = True,
                      bmap=None,
                      verbose=False,
-                     # remove_data_outside_plot_limits = True,
                      plt_kwargs = {}):
     """Plots a map of the flight path
 
@@ -817,41 +752,13 @@ def plot_conc_on_map(concentration,
                 bmap.drawstates(zorder = 100)
             if countries:
                 bmap.drawcountries(zorder = 100)
-### bstst
+
         if type(data).__name__ == 'DataArray':
             datat = data.loc[_pd.to_datetime(t), :]
             z = _np.ma.masked_invalid(datat.values)
             xm_lon, ym_lat = bmap(x_lon, y_lat)
-            
-            # wrong approach instead of cutting directly I shoud first set as nan and then cut rows and cols where ...
-            if 1:
-                xmin, xmax = bmap.ax.get_xlim()
-                ymin, ymax = bmap.ax.get_ylim()
-                
-                # where = _np.logical_and(_np.logical_and(xmin < xm_lon, xm_lon < xmax), _np.logical_and(ymin < ym_lat, ym_lat < ymax))
-                
-                # z = z[where]
-                # xm_lon = xm_lon[where]
-                # ym_lat = ym_lat[where]
-                
-                where = ~ _np.logical_and(_np.logical_and(xmin < xm_lon, xm_lon < xmax), _np.logical_and(ymin < ym_lat, ym_lat < ymax))
-                z[where] = _np.nan
-
-                where_a0 = ~_np.all(_np.isnan(z), axis=0)
-                where_a1 = ~_np.all(_np.isnan(z), axis=1)
-                z = z[:,where_a0]
-                z = z[where_a1,:]
-                
-                xm_lon = xm_lon[:,where_a0]
-                xm_lon = xm_lon[where_a1,:]
-                
-                ym_lat = ym_lat[:,where_a0]
-                ym_lat = ym_lat[where_a1,:]
-            
-            # if not 'alpha' in plt_kwargs.keys():
-            #     plt_kwargs['alpha'] = 0.6
-            
-            print(z.shape)
+            if not 'alpha' in plt_kwargs.keys():
+                plt_kwargs['alpha'] = 0.6
             pc = a[a_idx].pcolormesh(xm_lon, ym_lat, z, zorder=50, norm=_LogNorm(),shading='auto',
                                  cmap=_plt.cm.Accent, linewidth=0, rasterized=True, **plt_kwargs)
             if colorbar:
@@ -865,8 +772,7 @@ def plot_conc_on_map(concentration,
 #             title = '{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}'.format(tt.year, tt.month, tt.day, tt.hour, tt.minute, tt.second)
             title = concentration._parent.parameters.start_time
             a[a_idx].set_title(title, loc = 'left')
-### bstend
-        # the following is only for very old data ... I think
+
         elif type(data).__name__ == 'DataFrame':
             z = _np.ma.masked_invalid(data.values)
             xm_lon, ym_lat = bmap(x_lon, y_lat)
@@ -1243,11 +1149,8 @@ class Source_Attribution_Land_use(object):
             res_lu_other = res_lu[res_lu.ratio < low_lim].copy()
             res_lu[res_lu.ratio < low_lim] = _np.nan
             res_lu.dropna(inplace=True)
-            # res_lu.set_value(res_lu.shape[1] + 1, 'land_use_type', 'Other')
-            res_lu.at[res_lu.shape[1] + 1, 'land_use_type'] = 'Other'
-            # res_lu.set_value(res_lu.shape[1] + 1, 'ratio', res_lu_other.ratio.sum())            
-            res_lu.at[res_lu.shape[1] + 1, 'ratio'] = res_lu_other.ratio.sum()
-
+            res_lu.set_value(res_lu.shape[1] + 1, 'land_use_type', 'Other')
+            res_lu.set_value(res_lu.shape[1] + 1, 'ratio', res_lu_other.ratio.sum())
             res_lu.sort_values('ratio', inplace=True)
 
 
@@ -1305,7 +1208,6 @@ def plot_traj_on_map(self,
                      colorbar = True,
                      zorder = None,
                      rescale = False,
-                     remove_data_outside_plot_limits = True,
                      **plt_kwargs):
     """Plots a map of the flight path
 
@@ -1493,16 +1395,6 @@ def plot_traj_on_map(self,
 
         x, y = bmap(data.longitude.values, data.latitude.values)
 
-        data['x'] = x
-        data['y'] = y
-
-        if remove_data_outside_plot_limits:
-            xmin, xmax = bmap.ax.get_xlim()
-            ymin, ymax = bmap.ax.get_ylim()
-    
-            data = data[_np.logical_and(xmin < data.x, xmax > data.x)].copy()
-            data = data[_np.logical_and(ymin < data.y, ymax > data.y)].copy()
-        
         if color_gradiant:
             if type(color_gradiant).__name__ == 'bool':
                 cm = get_colorMap()
@@ -1519,10 +1411,9 @@ def plot_traj_on_map(self,
                 # plt_tools.plot.plot_gradiant_color(x)
             else:
                 try:
-                    # zt = self.trajectory[intensity]
-                    zt = data[intensity].values
+                    zt = self.trajectory[intensity]
                 except KeyError:
-                    opt = list(data.columns.values)
+                    opt = list(self.trajectory.columns.values)
                     opt.append('time')
                     txt = '{} not an option. Try {}'.format(intensity, opt )
                     raise KeyError(txt)
@@ -1531,8 +1422,8 @@ def plot_traj_on_map(self,
                 #              cmap=cm, zorder= zorder,
                 #              **plt_kwargs)
                 # _plt_tools.plot.plot_gradiant_color()
-                _,path,_ = _plt_tools.plot.plot_gradiant_color(data.x.values,
-                                                    data.y.values,
+                _,path,_ = _plt_tools.plot.plot_gradiant_color(x,
+                                                    y,
                                                     z=zt,
                                                     resample=1,
                                                     ax=a,

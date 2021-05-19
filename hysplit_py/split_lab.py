@@ -234,7 +234,6 @@ def multirun(run_info, folders, process_number, which='new', readme=None, test=F
     # pathlib.Path(save_base_folder).mkdir(parents=True, exist_ok=True)
 
 
-### baoustelle anfang
     def initiate_run(row, folders):
         if row.hy_mode == 'traj':
             run = Run('trajectory', path2hysplit = folders['path2hysplit'])
@@ -245,6 +244,13 @@ def multirun(run_info, folders, process_number, which='new', readme=None, test=F
             run.parameters.concentration_grids.default.center = [row.lat, row.lon]
             run.parameters.concentration_grids.default.span = [60.0, 360]
             run.parameters.number_of_samples = 20000
+            
+            if 'deposition_particle_diameter' in row.index:
+                run.parameters.pollutants.default.deposition_particle_diameter = row.deposition_particle_diameter
+            if 'deposition_particle_density' in row.index:
+                run.parameters.pollutants.default.deposition_particle_density = row.deposition_particle_density
+            if 'deposition_particle_shape' in row.index:
+                run.parameters.pollutants.default.deposition_particle_shape = row.deposition_particle_shape
             
         run.parameters.input_met_data_folder = folders['path2metfiles']
         run.parameters.meterologic_data_format = 'gdas0p5'
@@ -278,7 +284,6 @@ def multirun(run_info, folders, process_number, which='new', readme=None, test=F
             idx = int(len(startdt)/4) * 3
             startdt = _pd.concat([startdt[idx:], startdt[:idx]])
         return startdt
-##### bausteelle ende
     run_info = scramble_workload(run_info, process_number)    
 
     for e, (idx, row) in enumerate(run_info.iterrows()):
@@ -287,7 +292,6 @@ def multirun(run_info, folders, process_number, which='new', readme=None, test=F
         print(row.file_name, end='...')
         ### run
 
-### baustelle anfang
         # for run in runs:
         # fname = save_base_folder + '{}{:02d}{:02d}_{:02d}{:02d}{:02d}_{}.nc'.format(dt.year, dt.month, dt.day,
         #                                                                             dt.hour, dt.minute, dt.second,
@@ -338,7 +342,6 @@ def multirun(run_info, folders, process_number, which='new', readme=None, test=F
         if test:
             testres.append(run.result)
                       
-### baustelle ende
         print('done', end = '\t')
         if test:
             print('stop since testing?')

@@ -363,9 +363,9 @@ def date_str2file_name_list(start, stop, data_format):
     """
     month = ['XXX', 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
-    format_options = ['gdas1', 'gdas0p5', 'test']
+    format_options = ['gdas1', 'gdas0p5', 'gfs0p25','test']
     if data_format not in format_options:
-        txt = 'data_formate has to be one of %s' % (format_options)
+        txt = 'data_formate has to be one of %s. Programming and testing requried for other formats' % (format_options)
         raise ValueError(txt)
 
     if data_format == 'test':
@@ -407,6 +407,34 @@ def date_str2file_name_list(start, stop, data_format):
     elif data_format == 'gdas0p5':
         tdt = _pd.to_datetime(start)
         fbase = '{}{:02d}{:02d}_gdas0p5'
+        fname_s = fbase.format(tdt.year, tdt.month, tdt.day)
+
+        stt = _pd.to_datetime(stop)
+        fname_e = fbase.format(stt.year, stt.month, stt.day) #'gdas1.{}{}.w{}'.format(month[stt.month], year, week)
+
+        if (stt - tdt) / _pd.to_timedelta(1, 's') >= 0:
+            direction = 1
+        else:
+            direction = -1
+
+        fname = [fname_s]
+        if fname_s != fname_e:
+            fname = [fname_s]
+            i = 0
+            stt = _pd.to_datetime(start)
+            while i in range(1000):
+                i += 1
+                stt = _pd.to_datetime(stt) + _pd.to_timedelta(direction, 'D')
+                fname_t = fbase.format(stt.year, stt.month, stt.day) #'gdas1.{}{}.w{}'.format(month[stt.month], year, week)
+                if fname_t not in fname:
+                    fname.append(fname_t)
+                # print('{}\t{}'.format(fname_t, fname_e))
+                if fname_t == fname_e:
+                    break
+                
+    elif data_format == 'gfs0p25':
+        tdt = _pd.to_datetime(start)
+        fbase = '{}{:02d}{:02d}_gfs0p25'
         fname_s = fbase.format(tdt.year, tdt.month, tdt.day)
 
         stt = _pd.to_datetime(stop)
@@ -2804,6 +2832,7 @@ class Run(object):
         txtl = ['-------'] + [txt] + txtl
 
         # test if timerange is valid for met data format ... see ...parameters.meterologic_data_format.info()
+        # todo: the following is only considering a valid start date, but not a valid end date!!
         in_valid_date_range = True
         if self.parameters.meterologic_data_format._get_value() == 'gdas0p5':
             start_valid = (_pd.to_datetime(self.parameters.start_time._get_value()) - _pd.to_datetime(

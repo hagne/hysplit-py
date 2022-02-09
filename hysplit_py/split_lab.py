@@ -37,7 +37,7 @@ import os
 from matplotlib.colors import LinearSegmentedColormap as _LinearSegmentedColormap
 from matplotlib.colors import LogNorm as _LogNorm
 import ftplib
-from netCDF4 import Dataset as _Dataset
+# from netCDF4 import Dataset as _Dataset
 import copy
 
 def save_result_netCDF(result, fname, data_version = 0.2, verbose = False
@@ -196,7 +196,7 @@ def open_result_netCDF(fname, leave_open=False, raise_error = True):
     return HySplitConcentrationEnsemple(res_dic)
 
 
-def multirun(run_info, folders, process_number, which='new', readme=None, test=False):
+def multirun(run_info, folders, process_number, which='new', skip_error = True, readme=None, test=False, non_standard_parameters = {}):
     """
     Does the same run for a list of date times
     Parameters
@@ -253,12 +253,14 @@ def multirun(run_info, folders, process_number, which='new', readme=None, test=F
                 run.parameters.pollutants.default.deposition_particle_shape = row.deposition_particle_shape
             
         run.parameters.input_met_data_folder = folders['path2metfiles']
-        run.parameters.meterologic_data_format = 'gdas0p5'
+        run.parameters.meterologic_data_format = row.met_format#'gdas0p5'
         # run.parameters.starting_loc = [[coordinates_lat_lon[0], coordinates_lat_lon[1], altitude]]
         run.parameters.starting_loc = [[row.lat, row.lon, row.altitude]]
         run.parameters.run_time = row.run_time
         run.parameters.start_time = str(row.start_datetime)
-           
+        for nsp in non_standard_parameters:
+            setattr(run.parameters, nsp , non_standard_parameters[nsp] )
+        print(run.parameters.top_of_model_domain)
         return run
     
     def scramble_workload(startdt, process_number):
@@ -319,12 +321,14 @@ def multirun(run_info, folders, process_number, which='new', readme=None, test=F
         #             return run
         if test:
             run.parameters.number_of_samples = number_of_samples
-        if 1:
+        if skip_error:
             try:
                 run.download_missing_meterologic_files(max_files=12)
             except:
                 print('download of missing files failed -> skip!')
                 continue
+        else:
+            run.download_missing_meterologic_files(max_files=12)
         try:
             # print(run.parameters.start_time)
             run.run()
@@ -368,11 +372,29 @@ def date_str2file_name_list(start, stop, data_format):
         txt = 'data_formate has to be one of %s. Programming and testing requried for other formats' % (format_options)
         raise ValueError(txt)
 
+
+
+    
+    # time resolutio can result that you are outside the available met girds
+    tdt = _pd.to_datetime(start)
+    if data_format == 'gdas1':
+        timeres = 3
+    elif data_format == 'gdas0p5':
+        timeres = 3
+    elif data_format == 'gfs0p25':
+        timeres = 3   
+    else:
+        timeres = 0
+        
+    if tdt > stop: # backtrajectory
+        tdt += _pd.to_timedelta(timeres, unit = 'hours')
+    else: # forward
+        tdt -= _pd.to_timedelta(timeres, unit = 'hours')
+        
     if data_format == 'test':
         return ['oct1618.BIN']
 
-    elif data_format == 'gdas1':
-        tdt = _pd.to_datetime(start)
+    elif data_format == 'gdas1':                       
         year = str(tdt.year)[-2:]
         week = ((tdt.day - 1) // 7) + 1
         fname_s = 'gdas1.{}{}.w{}'.format(month[tdt.month], year, week)
@@ -405,7 +427,7 @@ def date_str2file_name_list(start, stop, data_format):
                     break
 
     elif data_format == 'gdas0p5':
-        tdt = _pd.to_datetime(start)
+        # tdt = _pd.to_datetime(start)
         fbase = '{}{:02d}{:02d}_gdas0p5'
         fname_s = fbase.format(tdt.year, tdt.month, tdt.day)
 
@@ -433,7 +455,7 @@ def date_str2file_name_list(start, stop, data_format):
                     break
                 
     elif data_format == 'gfs0p25':
-        tdt = _pd.to_datetime(start)
+        # tdt = _pd.to_datetime(start)
         fbase = '{}{:02d}{:02d}_gfs0p25'
         fname_s = fbase.format(tdt.year, tdt.month, tdt.day)
 
@@ -1540,11 +1562,14 @@ def plot_traj_on_map(self,
             else:
                 cm = color_gradiant
             if intensity == 'time':
-                # print('time')
-                hours = (self.trajectory.index[-1] - self.trajectory.index[0]) / _np.timedelta64(1,'h')
-                path = colorline(x, y, zmax = hours,
-                                 norm = _plt.Normalize(0.0, hours) ,zorder = zorder,
-                                 cmap = cm)
+                raise ValueError('"time" is deprecated. Use "age_of_trajectory(h)" instead')
+                # # print('time')
+                # hours = (self.trajectory.index[-1] - self.trajectory.index[0]) / _np.timedelta64(1,'h')
+                # path = colorline(x, y, zmax = hours,
+                #                  norm = _plt.Normalize(0.0, hours) ,zorder = zorder,
+                #                  cmap = cm)
+                
+                
 
                 # import plt_tools
                 # plt_tools.plot.plot_gradiant_color(x)
@@ -2171,6 +2196,9 @@ class Parameters(object):
 
     @property
     def input_met_file_names(self):
+        # # when you get too close to the next file you might get the error that you are outside the availble met time
+        # if self.meterologic_data_format == 'gdal1':
+        #     start_time = self.start_time._get_value()
         stop_time = _pd.to_datetime(self.start_time._get_value()) + _pd.to_timedelta(self.run_time._get_value(), 'H')
         list = date_str2file_name_list(self.start_time._get_value(), stop_time, self.meterologic_data_format._get_value())
         return list
